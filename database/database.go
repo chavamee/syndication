@@ -15,6 +15,8 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+// Package database provides wrapper functions that create and modify objects based on models in an SQL database.
+// See the models package for more information on the types of objects database operates on.
 package database
 
 import (
@@ -22,7 +24,7 @@ import (
 	"io"
 
 	"github.com/jinzhu/gorm"
-	// GORM sqlite package
+	// GORM dialect packages
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	_ "github.com/jinzhu/gorm/dialects/postgres"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
@@ -32,27 +34,27 @@ import (
 	"github.com/chavamee/syndication/models"
 )
 
-// Password Salt and Hash byte sizes
+// Password salt and Hash byte sizes
 const (
 	PWSaltBytes = 32
 	PWHashBytes = 64
 )
 
-// DB provides handlers to create and save SQL entries based on the various models used in syndication
+// DB represents a connectin to a SQL database
 type DB struct {
-	db   *gorm.DB
-	Path string
-	Type string
+	db         *gorm.DB
+	Connection string
+	Type       string
 }
 
 // NewDB creates a new DB instance
-func NewDB(dbType, path string) (db DB, err error) {
-	gormDB, err := gorm.Open(dbType, path)
+func NewDB(dbType, conn string) (db DB, err error) {
+	gormDB, err := gorm.Open(dbType, conn)
 	if err != nil {
 		return
 	}
 
-	db.Path = path
+	db.Connection = conn
 	db.Type = dbType
 
 	gormDB.AutoMigrate(&models.Feed{})
@@ -66,12 +68,12 @@ func NewDB(dbType, path string) (db DB, err error) {
 	return
 }
 
-// Close the connection with the backend database
+// Close ends connections with the database
 func (db *DB) Close() error {
 	return db.db.Close()
 }
 
-// NewUser database entry based on model user
+// NewUser creates a new User object
 func (db *DB) NewUser(username, password string) error {
 	user := &models.User{}
 	if !db.db.Where("username = ?", username).First(&user).RecordNotFound() {
@@ -104,13 +106,6 @@ func (db *DB) NewUser(username, password string) error {
 	})
 	user.SavedCategoryUUID = savedUUID
 
-	// Construct any user created categories
-	if len(user.Categories) > 0 {
-		for _, ctg := range user.Categories {
-			ctg.UUID = uuid.NewV4().String()
-		}
-	}
-
 	user.UUID = uuid.NewV4().String()
 	user.PasswordHash = hash
 	user.PasswordSalt = salt
@@ -120,7 +115,9 @@ func (db *DB) NewUser(username, password string) error {
 	return nil
 }
 
-// Users returns a list of all Users
+// Users returns a list of all User entries.
+// The parameter fields provides a way to select
+// which fields are populated in the returned models.
 func (db *DB) Users(fields ...string) (users []models.User) {
 	selectFields := "id,uuid"
 	if len(fields) != 0 {
@@ -132,34 +129,34 @@ func (db *DB) Users(fields ...string) (users []models.User) {
 	return
 }
 
-// UserPrimaryKey returns the SQL primary key of user with id
+// UserPrimaryKey returns the SQL primary key of a User with a uuid
 func (db *DB) UserPrimaryKey(uuid string) (uint, error) {
-	user := models.User{}
-	if db.db.First(&user, "uuid = ?", uuid).RecordNotFound() {
+	user := &models.User{}
+	if db.db.First(user, "uuid = ?", uuid).RecordNotFound() {
 		return 0, NotFound{"User does not exist"}
 	}
 	return user.ID, nil
 }
 
-// UserFromName returns a User model for a user with username
-func (db *DB) UserFromName(username string) (user models.User, err error) {
+// UserWithName returns a User with username
+func (db *DB) UserWithName(username string) (user models.User, err error) {
 	if db.db.First(&user, "username = ?", username).RecordNotFound() {
 		err = NotFound{"User does not exist"}
 	}
 	return
 }
 
-// UserFromID returns a User model for a user with id
-func (db *DB) UserFromID(id string) (user models.User, err error) {
-	if db.db.First(&user, "UUID = ?", id).RecordNotFound() {
+// UserWithUUID returns a User with id
+func (db *DB) UserWithUUID(uuid string) (user models.User, err error) {
+	if db.db.First(&user, "UUID = ?", uuid).RecordNotFound() {
 		err = NotFound{"User does not exist"}
 	}
 	return
 }
 
 // Authenticate a user and return its respective User model if successful
-func (db *DB) Authenticate(username string, password string) (user models.User, err error) {
-	user, err = db.UserFromName(username)
+func (db *DB) Authenticate(username, password string) (user models.User, err error) {
+	user, err = db.UserWithName(username)
 	if err != nil {
 		return
 	}
@@ -178,14 +175,16 @@ func (db *DB) Authenticate(username string, password string) (user models.User, 
 	return
 }
 
-// NewFeed database entry based on feed model for user
+// NewFeed creates a new Feed object owned by user
 func (db *DB) NewFeed(feed *models.Feed, user *models.User) error {
 	feed.UUID = uuid.NewV4().String()
 
-	ctg := models.Category{}
-	if feed.CategoryUUID != "" {
-		if db.db.Model(user).Where("uuid = ?", feed.CategoryUUID).Related(&ctg).RecordNotFound() {
-			return BadRequest{"Category does not exist"}
+	var err error
+	var ctg models.Category
+	if feed.Category.UUID != "" {
+		ctg, err = db.Category(feed.Category.UUID, user)
+		if err != nil {
+			return BadRequest{"Feed has invalid category"}
 		}
 	} else {
 		db.db.Model(user).Where("name = ?", models.Uncategorized).Related(&ctg)
@@ -193,27 +192,28 @@ func (db *DB) NewFeed(feed *models.Feed, user *models.User) error {
 
 	feed.Category = ctg
 	feed.CategoryID = ctg.ID
-	feed.CategoryUUID = ctg.UUID
+	feed.Category.UUID = ctg.UUID
+
 	db.db.Model(user).Association("Feeds").Append(feed)
 	db.db.Model(&ctg).Association("Feeds").Append(feed)
 
 	return nil
 }
 
-// Feeds returns a list of all Feeds owned by user
+// Feeds returns a list of all Feeds owned by a user
 func (db *DB) Feeds(user *models.User) (feeds []models.Feed) {
 	db.db.Model(user).Association("Feeds").Find(&feeds)
 	return
 }
 
-func (db *DB) FeedsFromCategory(user *models.User, categoryID string) (feeds []models.Feed, err error) {
-	var category models.Category
-	if db.db.Model(user).Where("uuid = ?", categoryID).Related(&category).RecordNotFound() {
-		err = NotFound{"Category does not exist"}
+// FeedsFromCategory returns all Feeds that belong to a category with categoryID
+func (db *DB) FeedsFromCategory(categoryID string, user *models.User) (feeds []models.Feed, err error) {
+	ctg, err := db.Category(categoryID, user)
+	if err != nil {
 		return
 	}
 
-	db.db.Model(&category).Association("Feeds").Find(&feeds)
+	db.db.Model(ctg).Association("Feeds").Find(&feeds)
 	return
 }
 
@@ -230,27 +230,26 @@ func (db *DB) Feed(id string, user *models.User) (feed models.Feed, err error) {
 
 // DeleteFeed with id and owned by user
 func (db *DB) DeleteFeed(id string, user *models.User) error {
-	foundFeed := models.Feed{}
-	if !db.db.Model(user).Where("uuid = ?", id).Related(&foundFeed).RecordNotFound() {
-		db.db.Delete(&foundFeed)
+	foundFeed := &models.Feed{}
+	if !db.db.Model(user).Where("uuid = ?", id).Related(foundFeed).RecordNotFound() {
+		db.db.Delete(foundFeed)
 		return nil
 	}
 	return NotFound{"Feed does not exist"}
 }
 
-// EditFeed for user
+// EditFeed owned by user
 func (db *DB) EditFeed(feed *models.Feed, user *models.User) error {
-	foundFeed := models.Feed{}
-	query := db.db.Model(user).Related(&foundFeed, "uuid = ?", feed.UUID)
-	if !query.RecordNotFound() {
+	foundFeed := &models.Feed{}
+	if !db.db.Model(user).Related(foundFeed, "uuid = ?", feed.UUID).RecordNotFound() {
 		foundFeed.Title = feed.Title
-		query.Save(foundFeed)
+		db.db.Model(feed).Save(foundFeed)
 		return nil
 	}
 	return NotFound{"Feed does not exist"}
 }
 
-// NewCategory database entry based on model ctg for user
+// NewCategory creates a new Category object owned by user
 func (db *DB) NewCategory(ctg *models.Category, user *models.User) error {
 	tmpCtg := &models.Category{}
 	if db.db.Model(user).Where("name = ?", ctg.Name).Related(tmpCtg).RecordNotFound() {
@@ -264,10 +263,10 @@ func (db *DB) NewCategory(ctg *models.Category, user *models.User) error {
 
 // EditCategory owned by user
 func (db *DB) EditCategory(ctg *models.Category, user *models.User) error {
-	foundCtg := models.Category{}
-	if !db.db.Model(user).Where("uuid = ?", ctg.UUID).Related(&foundCtg).RecordNotFound() {
+	foundCtg := &models.Category{}
+	if !db.db.Model(user).Where("uuid = ?", ctg.UUID).Related(foundCtg).RecordNotFound() {
 		foundCtg.Name = ctg.Name
-		db.db.Save(&foundCtg)
+		db.db.Model(ctg).Save(foundCtg)
 		return nil
 	}
 	return NotFound{"Category does not exist"}
@@ -279,15 +278,16 @@ func (db *DB) DeleteCategory(id string, user *models.User) error {
 		return BadRequest{"Cannot delete system categories"}
 	}
 
-	ctg := models.Category{}
-	if db.db.Model(user).Where("uuid = ?", id).Related(&ctg).RecordNotFound() {
+	ctg := &models.Category{}
+	if db.db.Model(user).Where("uuid = ?", id).Related(ctg).RecordNotFound() {
 		return NotFound{"Category does not exist"}
 	}
 
-	db.db.Delete(&ctg)
+	db.db.Delete(ctg)
 	return nil
 }
 
+// Category returns a Category with id and owned by user
 func (db *DB) Category(id string, user *models.User) (ctg models.Category, err error) {
 	if db.db.Model(user).Where("uuid = ?", id).Related(&ctg).RecordNotFound() {
 		err = NotFound{"Category does not exist"}
@@ -303,7 +303,7 @@ func (db *DB) Categories(user *models.User) (categories []models.Category) {
 
 // ChangeFeedCategory changes the category a feed belongs to
 func (db *DB) ChangeFeedCategory(feedID string, ctgID string, user *models.User) error {
-	feed := new(models.Feed)
+	feed := &models.Feed{}
 	if db.db.Model(user).Where("uuid = ?", feedID).Related(feed).RecordNotFound() {
 		return NotFound{"Feed does not exist"}
 	}
@@ -316,7 +316,7 @@ func (db *DB) ChangeFeedCategory(feedID string, ctgID string, user *models.User)
 
 	db.db.Model(prevCtg).Association("Feeds").Delete(feed)
 
-	newCtg := new(models.Category)
+	newCtg := &models.Category{}
 	if db.db.Model(user).Where("uuid = ?", ctgID).Related(newCtg).RecordNotFound() {
 		return NotFound{"Category does not exist"}
 	}
@@ -326,27 +326,31 @@ func (db *DB) ChangeFeedCategory(feedID string, ctgID string, user *models.User)
 	return nil
 }
 
-// NewEntry adds entries to a entries database for user
+// NewEntry creates a new Entry object owned by user
 func (db *DB) NewEntry(entry *models.Entry, user *models.User) error {
-	if entry.FeedUUID == "" {
+	if entry.Feed.UUID == "" {
 		return BadRequest{"Entry should have a feed"}
 	}
 
 	feed := models.Feed{}
-	if db.db.Model(user).Where("uuid = ?", entry.FeedUUID).Related(&feed).RecordNotFound() {
+	if db.db.Model(user).Where("uuid = ?", entry.Feed.UUID).Related(&feed).RecordNotFound() {
 		return NotFound{"Feed does not exist"}
 	}
 
 	entry.UUID = uuid.NewV4().String()
 	entry.Feed = feed
 	entry.FeedID = feed.ID
+
 	db.db.Model(user).Association("Entries").Append(entry)
 	db.db.Model(&feed).Association("Entries").Append(entry)
+
 	return nil
 }
 
-func (db *DB) NewEntries(entries []models.Entry, feedUUID string, user *models.User) error {
-	if feedUUID == "" {
+// NewEntries creates multiple new Entry objects which
+// are all owned by feed with feedUUID and user
+func (db *DB) NewEntries(entries []models.Entry, feed models.Feed, user *models.User) error {
+	if feed.UUID == "" {
 		return BadRequest{"Entry should have a feed"}
 	}
 
@@ -354,8 +358,7 @@ func (db *DB) NewEntries(entries []models.Entry, feedUUID string, user *models.U
 		return nil
 	}
 
-	feed := models.Feed{}
-	if db.db.Model(user).Where("uuid = ?", feedUUID).Related(&feed).RecordNotFound() {
+	if db.db.Model(user).Where("uuid = ?", feed.UUID).Related(&feed).RecordNotFound() {
 		return NotFound{"Feed does not exist"}
 	}
 
@@ -363,7 +366,6 @@ func (db *DB) NewEntries(entries []models.Entry, feedUUID string, user *models.U
 		entry.UUID = uuid.NewV4().String()
 		entry.Feed = feed
 		entry.FeedID = feed.ID
-		entry.FeedUUID = feedUUID
 
 		db.db.Model(user).Association("Entries").Append(&entry)
 		db.db.Model(&feed).Association("Entries").Append(&entry)
@@ -372,6 +374,7 @@ func (db *DB) NewEntries(entries []models.Entry, feedUUID string, user *models.U
 	return nil
 }
 
+// Entry returns an Entry with id and owned by user
 func (db *DB) Entry(id string, user *models.User) (entry models.Entry, err error) {
 	if db.db.Model(user).Where("uuid = ?", id).Related(&entry).RecordNotFound() {
 		err = NotFound{"Feed does not exists"}
@@ -382,6 +385,7 @@ func (db *DB) Entry(id string, user *models.User) (entry models.Entry, err error
 	return
 }
 
+// EntryWithGUIDExists returns true if an Entry exists with the given guid and is owned by user
 func (db *DB) EntryWithGUIDExists(guid string, user *models.User) bool {
 	return !db.db.Model(user).Where("guid = ?", guid).Related(&models.Entry{}).RecordNotFound()
 }
@@ -402,41 +406,44 @@ func (db *DB) Entries(orderByDesc bool, marker models.Marker, user *models.User)
 	return
 }
 
+// EntriesFromFeed returns all Entries that belong to a feed with feedID
 func (db *DB) EntriesFromFeed(feedID string, orderByDesc bool, marker models.Marker, user *models.User) (entries []models.Entry, err error) {
 	if marker == models.None {
 		err = BadRequest{"Request should include a valid marker"}
 		return
 	}
 
-	var feed models.Feed
-	if db.db.Model(user).Where("uuid = ?", feedID).Related(&feed).RecordNotFound() {
+	feed := &models.Feed{}
+	if db.db.Model(user).Where("uuid = ?", feedID).Related(feed).RecordNotFound() {
 		err = NotFound{"Feed not found"}
 		return
 	}
 
-	query := db.db.Model(&feed)
+	query := db.db.Model(feed)
 	if marker != models.Any {
 		query = query.Where("mark = ?", marker)
 	}
 
 	query.Association("Entries").Find(&entries)
+
 	return
 }
 
+// EntriesFromCategory returns all Entries that are related to a Category with categoryID by the entries' owning Feed
 func (db *DB) EntriesFromCategory(categoryID string, orderByDesc bool, marker models.Marker, user *models.User) (entries []models.Entry, err error) {
 	if marker == models.None {
 		err = BadRequest{"Request should include a valid marker"}
 		return
 	}
 
-	var category models.Category
-	if db.db.Model(user).Where("uuid = ?", categoryID).Related(&category).RecordNotFound() {
+	category := &models.Category{}
+	if db.db.Model(user).Where("uuid = ?", categoryID).Related(category).RecordNotFound() {
 		err = NotFound{"Category not found"}
 		return
 	}
 
 	var feeds []models.Feed
-	db.db.Model(&category).Related(&feeds)
+	db.db.Model(category).Related(&feeds)
 
 	var order *gorm.DB
 	if orderByDesc {
@@ -458,12 +465,15 @@ func (db *DB) EntriesFromCategory(categoryID string, orderByDesc bool, marker mo
 	return
 }
 
-func (db *DB) EntriesFromTag(user *models.User, makrer models.Marker, orderByDesc bool, tagID string) (entries []models.Entry, err error) {
+// EntriesFromTag returns all Entries which are tagged with tagID
+func (db *DB) EntriesFromTag(tagID string, makrer models.Marker, orderByDesc bool, user *models.User) (entries []models.Entry, err error) {
+	// TODO
 	return
 }
 
+// CategoryStats returns all Stats for a Category with the given id and that is owned by user
 func (db *DB) CategoryStats(id string, user *models.User) (stats models.Stats, err error) {
-	ctg := new(models.Category)
+	ctg := &models.Category{}
 	if db.db.Model(user).Where("uuid = ?", id).Related(ctg).RecordNotFound() {
 		err = NotFound{"Category not found"}
 		return
@@ -486,8 +496,9 @@ func (db *DB) CategoryStats(id string, user *models.User) (stats models.Stats, e
 	return
 }
 
+// FeedStats returns all Stats for a Feed with the given id and that is owned by user
 func (db *DB) FeedStats(id string, user *models.User) (stats models.Stats, err error) {
-	feed := new(models.Feed)
+	feed := &models.Feed{}
 	if db.db.Model(user).Where("uuid = ?", id).Related(feed).RecordNotFound() {
 		err = NotFound{"Feed not found"}
 		return
@@ -500,6 +511,7 @@ func (db *DB) FeedStats(id string, user *models.User) (stats models.Stats, err e
 	return
 }
 
+// Stats returns all Stats for the given user
 func (db *DB) Stats(user *models.User) (stats models.Stats) {
 	stats.Unread = db.db.Model(user).Where("mark = ?", models.Unread).Association("Entries").Count()
 	stats.Read = db.db.Model(user).Where("mark = ?", models.Read).Association("Entries").Count()
@@ -508,14 +520,14 @@ func (db *DB) Stats(user *models.User) (stats models.Stats) {
 	return
 }
 
-// MarkCategory applies marker to a category with id and owned by user
+// MarkFeed applies marker to a Feed with id and owned by user
 func (db *DB) MarkFeed(id string, marker models.Marker, user *models.User) error {
 	feed, err := db.Feed(id, user)
 	if err != nil {
 		return err
 	}
 
-	db.db.Model(&models.Entry{}).Where("user_id = ?", user.ID).Where("feed_id = ?", feed.ID).Update(models.Entry{Mark: marker})
+	db.db.Model(&models.Entry{}).Where("user_id = ? AND feed_id = ?", user.ID, feed.ID).Update(models.Entry{Mark: marker})
 	return nil
 }
 

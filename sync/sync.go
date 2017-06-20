@@ -62,7 +62,7 @@ func FetchFeed(feed *models.Feed) error {
 	return err
 }
 
-func (s *Sync) checkForUpdates(feed *models.Feed) ([]models.Entry, error) {
+func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.Entry, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", feed.Subscription, nil)
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *Sync) checkForUpdates(feed *models.Feed) ([]models.Entry, error) {
 			item.GUID = itemGUID
 		}
 
-		if s.db.EntryWithGUIDExists(itemGUID, &feed.User) {
+		if s.db.EntryWithGUIDExists(itemGUID, user) {
 			continue
 		}
 
@@ -129,11 +129,10 @@ func convertItemsToEntries(feed models.Feed, item *gofeed.Item) models.Entry {
 		Description: item.Description,
 		Link:        item.Link,
 		GUID:        item.GUID,
+		Mark:        models.Unread,
 
-		Feed:     feed,
-		FeedID:   feed.ID,
-		FeedUUID: feed.UUID,
-		Mark:     models.Unread,
+		Feed:   feed,
+		FeedID: feed.ID,
 	}
 
 	if item.Author != nil {
@@ -150,41 +149,38 @@ func (s *Sync) SyncUsers() {
 	}
 }
 
-func (s *Sync) SyncFeed(feed *models.Feed) error {
+func (s *Sync) SyncFeed(feed *models.Feed, user *models.User) error {
 	if !time.Now().After(feed.LastUpdated.Add(time.Minute)) {
 		return nil
 	}
 
-	entries, err := s.checkForUpdates(feed)
+	entries, err := s.checkForUpdates(feed, user)
 	if err != nil {
 		return err
 	}
 
-	err = s.db.NewEntries(entries, feed.UUID, &feed.User)
+	err = s.db.NewEntries(entries, *feed, user)
 	if err != nil {
 		return err
 	}
 
-	err = s.db.EditFeed(feed, &feed.User)
+	err = s.db.EditFeed(feed, user)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Sync) SyncCategory(category *models.Category) error {
-	feeds, err := s.db.FeedsFromCategory(&category.User, category.UUID)
+func (s *Sync) SyncCategory(category *models.Category, user *models.User) error {
+	feeds, err := s.db.FeedsFromCategory(category.UUID, user)
 	if err != nil {
 		return err
 	}
 
 	for _, feed := range feeds {
-		feed.User = category.User
-		feed.UserID = category.UserID
 		feed.Category = *category
 		feed.CategoryID = category.ID
-		feed.CategoryUUID = category.UUID
-		s.SyncFeed(&feed)
+		s.SyncFeed(&feed, user)
 	}
 
 	return nil
@@ -193,10 +189,7 @@ func (s *Sync) SyncCategory(category *models.Category) error {
 func (s *Sync) SyncUser(user *models.User) error {
 	feeds := s.db.Feeds(user)
 	for _, feed := range feeds {
-		feed.User = *user
-
-		feed.UserID = user.ID
-		s.SyncFeed(&feed)
+		s.SyncFeed(&feed, user)
 	}
 
 	return nil

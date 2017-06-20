@@ -61,7 +61,7 @@ func (suite *SyncTestSuite) SetupTest() {
 	err = suite.db.NewUser("test", "golang")
 	suite.Require().Nil(err)
 
-	suite.user, err = suite.db.UserFromName("test")
+	suite.user, err = suite.db.UserWithName("test")
 	suite.Require().Nil(err)
 
 	suite.server = &http.Server{
@@ -78,7 +78,7 @@ func (suite *SyncTestSuite) SetupTest() {
 
 func (suite *SyncTestSuite) TearDownTest() {
 	suite.db.Close()
-	os.Remove(suite.db.Path)
+	os.Remove(suite.db.Connection)
 	suite.server.Close()
 }
 
@@ -111,13 +111,10 @@ func (suite *SyncTestSuite) TestFeedWithNonMatchingEtag() {
 	suite.Require().Nil(err)
 	suite.Require().NotEmpty(feed.UUID)
 
-	feed.User = suite.user
-	feed.UserID = suite.user.ID
-
-	err = suite.sync.SyncFeed(&feed)
+	err = suite.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.None, &suite.user)
+	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Any, &suite.user)
 	suite.Require().Nil(err)
 	suite.Len(entries, 5)
 }
@@ -133,13 +130,10 @@ func (suite *SyncTestSuite) TestFeedWithMatchingEtag() {
 	suite.Require().Nil(err)
 	suite.Require().NotEmpty(feed.UUID)
 
-	feed.User = suite.user
-	feed.UserID = suite.user.ID
-
-	err = suite.sync.SyncFeed(&feed)
+	err = suite.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.None, &suite.user)
+	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Any, &suite.user)
 	suite.Require().Nil(err)
 	suite.Len(entries, 0)
 }
@@ -157,22 +151,19 @@ func (suite *SyncTestSuite) TestFeedWithNewEntriesWithGUIDs() {
 	suite.Require().Nil(err)
 	suite.Require().NotEmpty(feed.UUID)
 
-	feed.User = suite.user
-	feed.UserID = suite.user.ID
-
-	err = suite.sync.SyncFeed(&feed)
+	err = suite.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.None, &suite.user)
+	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Any, &suite.user)
 	suite.Require().Nil(err)
 	suite.Len(entries, 5)
 
 	feed.LastUpdated = time.Time{}
 
-	err = suite.sync.SyncFeed(&feed)
+	err = suite.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	entries, err = suite.db.EntriesFromFeed(feed.UUID, true, models.None, &suite.user)
+	entries, err = suite.db.EntriesFromFeed(feed.UUID, true, models.Any, &suite.user)
 	suite.Require().Nil(err)
 	suite.Len(entries, 5)
 }
@@ -187,13 +178,10 @@ func (suite *SyncTestSuite) TestFeedWithNewEntriesWithoutGUIDs() {
 	suite.Require().Nil(err)
 	suite.Require().NotEmpty(feed.UUID)
 
-	feed.User = suite.user
-	feed.UserID = suite.user.ID
-
-	err = suite.sync.SyncFeed(&feed)
+	err = suite.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.None, &suite.user)
+	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Any, &suite.user)
 	suite.Require().Nil(err)
 	suite.Len(entries, 5)
 }

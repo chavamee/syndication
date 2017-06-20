@@ -48,13 +48,15 @@ func (suite *DatabaseTestSuite) SetupTest() {
 	err = suite.db.NewUser("test", "golang")
 	suite.Require().Nil(err)
 
-	suite.user, err = suite.db.UserFromName("test")
+	suite.user, err = suite.db.UserWithName("test")
 	suite.Require().Nil(err)
 }
 
 func (suite *DatabaseTestSuite) TearDownTest() {
-	suite.db.Close()
-	os.Remove(suite.db.Path)
+	err := suite.db.Close()
+	suite.Nil(err)
+	err = os.Remove(suite.db.Connection)
+	suite.Nil(err)
 }
 
 func (suite *DatabaseTestSuite) TestNewCategory() {
@@ -107,7 +109,8 @@ func (suite *DatabaseTestSuite) TestEditCategory() {
 	suite.Equal(query.Name, "News")
 
 	ctg.Name = "World News"
-	suite.db.EditCategory(&ctg, &suite.user)
+	err = suite.db.EditCategory(&ctg, &suite.user)
+	suite.Require().Nil(err)
 
 	query, err = suite.db.Category(ctg.UUID, &suite.user)
 	suite.Nil(err)
@@ -170,7 +173,7 @@ func (suite *DatabaseTestSuite) TestNewFeedWithDefaults() {
 	suite.NotEmpty(query.Category.UUID)
 	suite.Equal(query.Category.Name, models.Uncategorized)
 
-	feeds, err := suite.db.FeedsFromCategory(&suite.user, query.Category.UUID)
+	feeds, err := suite.db.FeedsFromCategory(query.Category.UUID, &suite.user)
 	suite.Nil(err)
 	suite.NotEmpty(feeds)
 	suite.Equal(feeds[0].Title, feed.Title)
@@ -194,7 +197,6 @@ func (suite *DatabaseTestSuite) TestNewFeedWithCategory() {
 		Subscription: "http://example.com",
 		Category:     ctg,
 		CategoryID:   ctg.ID,
-		CategoryUUID: ctg.UUID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -212,7 +214,7 @@ func (suite *DatabaseTestSuite) TestNewFeedWithCategory() {
 	suite.NotEmpty(query.Category.UUID)
 	suite.Equal(query.Category.Name, "News")
 
-	feeds, err := suite.db.FeedsFromCategory(&suite.user, ctg.UUID)
+	feeds, err := suite.db.FeedsFromCategory(ctg.UUID, &suite.user)
 	suite.Nil(err)
 	suite.NotEmpty(feeds)
 	suite.Equal(feeds[0].Title, feed.Title)
@@ -224,7 +226,9 @@ func (suite *DatabaseTestSuite) TestNewFeedWithNonExistingCategory() {
 	feed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		CategoryUUID: uuid.NewV4().String(),
+		Category: models.Category{
+			UUID: uuid.NewV4().String(),
+		},
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -232,51 +236,50 @@ func (suite *DatabaseTestSuite) TestNewFeedWithNonExistingCategory() {
 }
 
 func (suite *DatabaseTestSuite) TestFeedsFromNonExistingCategory() {
-	_, err := suite.db.FeedsFromCategory(&suite.user, uuid.NewV4().String())
+	_, err := suite.db.FeedsFromCategory(uuid.NewV4().String(), &suite.user)
 	suite.IsType(NotFound{}, err)
 }
 
 func (suite *DatabaseTestSuite) TestChangeFeedCategory() {
-	first_ctg := models.Category{
+	firstCtg := models.Category{
 		Name: "News",
 	}
 
-	second_ctg := models.Category{
+	secondCtg := models.Category{
 		Name: "Tech",
 	}
 
-	err := suite.db.NewCategory(&first_ctg, &suite.user)
-	err = suite.db.NewCategory(&second_ctg, &suite.user)
+	err := suite.db.NewCategory(&firstCtg, &suite.user)
+	err = suite.db.NewCategory(&secondCtg, &suite.user)
 
 	feed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     first_ctg,
-		CategoryID:   first_ctg.ID,
-		CategoryUUID: first_ctg.UUID,
+		Category:     firstCtg,
+		CategoryID:   firstCtg.ID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
-	feeds, err := suite.db.FeedsFromCategory(&suite.user, first_ctg.UUID)
+	feeds, err := suite.db.FeedsFromCategory(firstCtg.UUID, &suite.user)
 	suite.Nil(err)
 	suite.Require().Len(feeds, 1)
 	suite.Equal(feeds[0].UUID, feed.UUID)
 	suite.Equal(feeds[0].Title, feed.Title)
 
-	feeds, err = suite.db.FeedsFromCategory(&suite.user, second_ctg.UUID)
+	feeds, err = suite.db.FeedsFromCategory(secondCtg.UUID, &suite.user)
 	suite.Nil(err)
 	suite.Empty(feeds)
 
-	err = suite.db.ChangeFeedCategory(feed.UUID, second_ctg.UUID, &suite.user)
+	err = suite.db.ChangeFeedCategory(feed.UUID, secondCtg.UUID, &suite.user)
 	suite.Nil(err)
 
-	feeds, err = suite.db.FeedsFromCategory(&suite.user, first_ctg.UUID)
+	feeds, err = suite.db.FeedsFromCategory(firstCtg.UUID, &suite.user)
 	suite.Nil(err)
 	suite.Empty(feeds)
 
-	feeds, err = suite.db.FeedsFromCategory(&suite.user, second_ctg.UUID)
+	feeds, err = suite.db.FeedsFromCategory(secondCtg.UUID, &suite.user)
 	suite.Nil(err)
 	suite.Require().Len(feeds, 1)
 	suite.Equal(feeds[0].UUID, feed.UUID)
@@ -383,7 +386,7 @@ func (suite *DatabaseTestSuite) TestNewEntry() {
 		Author:      "chavamee",
 		Link:        "http://example.com",
 		Mark:        models.Unread,
-		FeedUUID:    feed.UUID,
+		Feed:        feed,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -415,7 +418,6 @@ func (suite *DatabaseTestSuite) TestNewEntryWithEmptyFeed() {
 		Description: "Testing entry",
 		Author:      "chavamee",
 		Mark:        models.Unread,
-		FeedUUID:    "",
 	}
 
 	err := suite.db.NewEntry(&entry, &suite.user)
@@ -434,7 +436,9 @@ func (suite *DatabaseTestSuite) TestNewEntryWithBadFeed() {
 		Description: "Testing entry",
 		Author:      "chavamee",
 		Mark:        models.Unread,
-		FeedUUID:    uuid.NewV4().String(),
+		Feed: models.Feed{
+			UUID: uuid.NewV4().String(),
+		},
 	}
 
 	err := suite.db.NewEntry(&entry, &suite.user)
@@ -463,7 +467,7 @@ func (suite *DatabaseTestSuite) TestEntriesFromFeed() {
 		Author:      "chavamee",
 		Link:        "http://example.com",
 		Mark:        models.Unread,
-		FeedUUID:    feed.UUID,
+		Feed:        feed,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -490,11 +494,9 @@ func (suite *DatabaseTestSuite) TestEntryWithGUIDExists() {
 	suite.Require().Nil(err)
 
 	entry := models.Entry{
-		Title:    "Test Entry",
-		GUID:     "entry@test",
-		Feed:     feed,
-		FeedID:   feed.ID,
-		FeedUUID: feed.UUID,
+		Title: "Test Entry",
+		GUID:  "entry@test",
+		Feed:  feed,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -512,10 +514,8 @@ func (suite *DatabaseTestSuite) TestEntryWithGUIDDoesNotExists() {
 	suite.Require().Nil(err)
 
 	entry := models.Entry{
-		Title:    "Test Entry",
-		Feed:     feed,
-		FeedID:   feed.ID,
-		FeedUUID: feed.UUID,
+		Title: "Test Entry",
+		Feed:  feed,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -524,57 +524,54 @@ func (suite *DatabaseTestSuite) TestEntryWithGUIDDoesNotExists() {
 }
 
 func (suite *DatabaseTestSuite) TestEntriesFromCategory() {
-	first_ctg := models.Category{
+	firstCtg := models.Category{
 		Name: "News",
 	}
 
-	second_ctg := models.Category{
+	secondCtg := models.Category{
 		Name: "Tech",
 	}
 
-	err := suite.db.NewCategory(&first_ctg, &suite.user)
+	err := suite.db.NewCategory(&firstCtg, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(first_ctg.UUID)
+	suite.NotEmpty(firstCtg.UUID)
 
-	err = suite.db.NewCategory(&second_ctg, &suite.user)
+	err = suite.db.NewCategory(&secondCtg, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_ctg.UUID)
+	suite.NotEmpty(secondCtg.UUID)
 
-	first_feed := models.Feed{
+	firstFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     first_ctg,
-		CategoryID:   first_ctg.ID,
-		CategoryUUID: first_ctg.UUID,
+		Category:     firstCtg,
+		CategoryID:   firstCtg.ID,
 	}
 
-	second_feed := models.Feed{
+	secondFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     second_ctg,
-		CategoryID:   second_ctg.ID,
-		CategoryUUID: second_ctg.UUID,
+		Category:     secondCtg,
+		CategoryID:   secondCtg.ID,
 	}
 
-	third_feed := models.Feed{
+	thirdFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     second_ctg,
-		CategoryID:   second_ctg.ID,
-		CategoryUUID: second_ctg.UUID,
+		Category:     secondCtg,
+		CategoryID:   secondCtg.ID,
 	}
 
-	err = suite.db.NewFeed(&first_feed, &suite.user)
+	err = suite.db.NewFeed(&firstFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(first_feed.UUID)
+	suite.NotEmpty(firstFeed.UUID)
 
-	err = suite.db.NewFeed(&second_feed, &suite.user)
+	err = suite.db.NewFeed(&secondFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_feed.UUID)
+	suite.NotEmpty(secondFeed.UUID)
 
-	err = suite.db.NewFeed(&third_feed, &suite.user)
+	err = suite.db.NewFeed(&thirdFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_feed.UUID)
+	suite.NotEmpty(secondFeed.UUID)
 
 	for i := 0; i < 10; i++ {
 		var entry models.Entry
@@ -585,7 +582,7 @@ func (suite *DatabaseTestSuite) TestEntriesFromCategory() {
 				Author:      "chavamee",
 				Link:        "http://example.com",
 				Mark:        models.Unread,
-				FeedUUID:    first_feed.UUID,
+				Feed:        firstFeed,
 			}
 		} else {
 			if i < 7 {
@@ -595,7 +592,7 @@ func (suite *DatabaseTestSuite) TestEntriesFromCategory() {
 					Author:      "chavamee",
 					Link:        "http://example.com",
 					Mark:        models.Unread,
-					FeedUUID:    second_feed.UUID,
+					Feed:        secondFeed,
 				}
 			} else {
 				entry = models.Entry{
@@ -604,7 +601,7 @@ func (suite *DatabaseTestSuite) TestEntriesFromCategory() {
 					Author:      "chavamee",
 					Link:        "http://example.com",
 					Mark:        models.Unread,
-					FeedUUID:    third_feed.UUID,
+					Feed:        thirdFeed,
 				}
 			}
 		}
@@ -613,13 +610,13 @@ func (suite *DatabaseTestSuite) TestEntriesFromCategory() {
 		suite.Require().Nil(err)
 	}
 
-	entries, err := suite.db.EntriesFromCategory(first_ctg.UUID, false, models.Unread, &suite.user)
+	entries, err := suite.db.EntriesFromCategory(firstCtg.UUID, false, models.Unread, &suite.user)
 	suite.Nil(err)
 	suite.NotEmpty(entries)
 	suite.Len(entries, 5)
 	suite.Equal(entries[0].Title, "First Feed Test Entry 0")
 
-	entries, err = suite.db.EntriesFromCategory(second_ctg.UUID, true, models.Unread, &suite.user)
+	entries, err = suite.db.EntriesFromCategory(secondCtg.UUID, true, models.Unread, &suite.user)
 	suite.Nil(err)
 	suite.NotEmpty(entries)
 	suite.Len(entries, 5)
@@ -633,45 +630,43 @@ func (suite *DatabaseTestSuite) TestEntriesFromNonExistingCategory() {
 }
 
 func (suite *DatabaseTestSuite) TestMarkCategory() {
-	first_ctg := models.Category{
+	firstCtg := models.Category{
 		Name: "News",
 	}
 
-	second_ctg := models.Category{
+	secondCtg := models.Category{
 		Name: "Tech",
 	}
 
-	err := suite.db.NewCategory(&first_ctg, &suite.user)
+	err := suite.db.NewCategory(&firstCtg, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(first_ctg.UUID)
+	suite.NotEmpty(firstCtg.UUID)
 
-	err = suite.db.NewCategory(&second_ctg, &suite.user)
+	err = suite.db.NewCategory(&secondCtg, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_ctg.UUID)
+	suite.NotEmpty(secondCtg.UUID)
 
-	first_feed := models.Feed{
+	firstFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     first_ctg,
-		CategoryID:   first_ctg.ID,
-		CategoryUUID: first_ctg.UUID,
+		Category:     firstCtg,
+		CategoryID:   firstCtg.ID,
 	}
 
-	second_feed := models.Feed{
+	secondFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
-		Category:     second_ctg,
-		CategoryID:   second_ctg.ID,
-		CategoryUUID: second_ctg.UUID,
+		Category:     secondCtg,
+		CategoryID:   secondCtg.ID,
 	}
 
-	err = suite.db.NewFeed(&first_feed, &suite.user)
+	err = suite.db.NewFeed(&firstFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(first_feed.UUID)
+	suite.NotEmpty(firstFeed.UUID)
 
-	err = suite.db.NewFeed(&second_feed, &suite.user)
+	err = suite.db.NewFeed(&secondFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_feed.UUID)
+	suite.NotEmpty(secondFeed.UUID)
 
 	for i := 0; i < 10; i++ {
 		var entry models.Entry
@@ -682,7 +677,7 @@ func (suite *DatabaseTestSuite) TestMarkCategory() {
 				Author:      "chavamee",
 				Link:        "http://example.com",
 				Mark:        models.Unread,
-				FeedUUID:    first_feed.UUID,
+				Feed:        firstFeed,
 			}
 		} else {
 			entry = models.Entry{
@@ -691,7 +686,7 @@ func (suite *DatabaseTestSuite) TestMarkCategory() {
 				Author:      "chavamee",
 				Link:        "http://example.com",
 				Mark:        models.Read,
-				FeedUUID:    second_feed.UUID,
+				Feed:        secondFeed,
 			}
 		}
 
@@ -703,10 +698,10 @@ func (suite *DatabaseTestSuite) TestMarkCategory() {
 	suite.Require().Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Read).Association("Entries").Count(), 5)
 	suite.Require().Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Unread).Association("Entries").Count(), 5)
 
-	err = suite.db.MarkCategory(first_ctg.UUID, models.Read, &suite.user)
+	err = suite.db.MarkCategory(firstCtg.UUID, models.Read, &suite.user)
 	suite.Nil(err)
 
-	entries, err := suite.db.EntriesFromCategory(first_ctg.UUID, true, models.Any, &suite.user)
+	entries, err := suite.db.EntriesFromCategory(firstCtg.UUID, true, models.Any, &suite.user)
 	suite.Nil(err)
 	suite.Len(entries, 5)
 
@@ -716,12 +711,12 @@ func (suite *DatabaseTestSuite) TestMarkCategory() {
 		suite.EqualValues(entry.Mark, models.Read)
 	}
 
-	err = suite.db.MarkCategory(second_ctg.UUID, models.Unread, &suite.user)
+	err = suite.db.MarkCategory(secondCtg.UUID, models.Unread, &suite.user)
 	suite.Nil(err)
 
 	suite.Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Unread).Association("Entries").Count(), 5)
 
-	entries, err = suite.db.EntriesFromCategory(second_ctg.UUID, true, models.Any, &suite.user)
+	entries, err = suite.db.EntriesFromCategory(secondCtg.UUID, true, models.Any, &suite.user)
 	suite.Nil(err)
 	suite.Len(entries, 5)
 
@@ -731,23 +726,23 @@ func (suite *DatabaseTestSuite) TestMarkCategory() {
 }
 
 func (suite *DatabaseTestSuite) TestMarkFeed() {
-	first_feed := models.Feed{
+	firstFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
 	}
 
-	second_feed := models.Feed{
+	secondFeed := models.Feed{
 		Title:        "Test site",
 		Subscription: "http://example.com",
 	}
 
-	err := suite.db.NewFeed(&first_feed, &suite.user)
+	err := suite.db.NewFeed(&firstFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(first_feed.UUID)
+	suite.NotEmpty(firstFeed.UUID)
 
-	err = suite.db.NewFeed(&second_feed, &suite.user)
+	err = suite.db.NewFeed(&secondFeed, &suite.user)
 	suite.Require().Nil(err)
-	suite.NotEmpty(second_feed.UUID)
+	suite.NotEmpty(secondFeed.UUID)
 
 	for i := 0; i < 10; i++ {
 		var entry models.Entry
@@ -758,7 +753,7 @@ func (suite *DatabaseTestSuite) TestMarkFeed() {
 				Author:      "chavamee",
 				Link:        "http://example.com",
 				Mark:        models.Unread,
-				FeedUUID:    first_feed.UUID,
+				Feed:        firstFeed,
 			}
 		} else {
 			entry = models.Entry{
@@ -767,7 +762,7 @@ func (suite *DatabaseTestSuite) TestMarkFeed() {
 				Author:      "chavamee",
 				Link:        "http://example.com",
 				Mark:        models.Read,
-				FeedUUID:    second_feed.UUID,
+				Feed:        secondFeed,
 			}
 		}
 
@@ -779,10 +774,10 @@ func (suite *DatabaseTestSuite) TestMarkFeed() {
 	suite.Require().Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Read).Association("Entries").Count(), 5)
 	suite.Require().Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Unread).Association("Entries").Count(), 5)
 
-	err = suite.db.MarkFeed(first_feed.UUID, models.Read, &suite.user)
+	err = suite.db.MarkFeed(firstFeed.UUID, models.Read, &suite.user)
 	suite.Nil(err)
 
-	entries, err := suite.db.EntriesFromFeed(first_feed.UUID, true, models.Any, &suite.user)
+	entries, err := suite.db.EntriesFromFeed(firstFeed.UUID, true, models.Any, &suite.user)
 	suite.Nil(err)
 	suite.Len(entries, 5)
 
@@ -792,12 +787,12 @@ func (suite *DatabaseTestSuite) TestMarkFeed() {
 		suite.EqualValues(entry.Mark, models.Read)
 	}
 
-	err = suite.db.MarkFeed(second_feed.UUID, models.Unread, &suite.user)
+	err = suite.db.MarkFeed(secondFeed.UUID, models.Unread, &suite.user)
 	suite.Nil(err)
 
 	suite.Equal(suite.db.db.Model(&suite.user).Where("mark = ?", models.Unread).Association("Entries").Count(), 5)
 
-	entries, err = suite.db.EntriesFromFeed(second_feed.UUID, true, models.Any, &suite.user)
+	entries, err = suite.db.EntriesFromFeed(secondFeed.UUID, true, models.Any, &suite.user)
 	suite.Nil(err)
 	suite.Len(entries, 5)
 
@@ -816,11 +811,9 @@ func (suite *DatabaseTestSuite) TestMarkEntry() {
 	suite.Require().Nil(err)
 
 	entry := models.Entry{
-		Title:    "Article",
-		Feed:     feed,
-		FeedID:   feed.ID,
-		FeedUUID: feed.UUID,
-		Mark:     models.Unread,
+		Title: "Article",
+		Feed:  feed,
+		Mark:  models.Unread,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -854,13 +847,11 @@ func (suite *DatabaseTestSuite) TestStats() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Read,
+			Saved: true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -869,12 +860,10 @@ func (suite *DatabaseTestSuite) TestStats() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -900,13 +889,11 @@ func (suite *DatabaseTestSuite) TestFeedStats() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Read,
+			Saved: true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -915,12 +902,10 @@ func (suite *DatabaseTestSuite) TestFeedStats() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -949,7 +934,6 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 		Subscription: "http://example.com",
 		Category:     category,
 		CategoryID:   category.ID,
-		CategoryUUID: category.UUID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -958,13 +942,11 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Read,
+			Saved: true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -973,12 +955,10 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title: "Item",
+			Link:  "http://example.com",
+			Feed:  feed,
+			Mark:  models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -995,32 +975,33 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 func TestNewDB(t *testing.T) {
 	_, err := NewDB("sqlite3", TestDatabasePath)
 	assert.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestNewDBWithBadOptions(t *testing.T) {
 	_, err := NewDB("bogus", TestDatabasePath)
 	assert.NotNil(t, err)
-	defer os.Remove(TestDatabasePath)
 }
 
 func TestNewUser(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test", "golang")
 	assert.Nil(t, err)
 
-	user, err := db.UserFromName("test")
+	user, err := db.UserWithName("test")
 	assert.Nil(t, err)
 	assert.NotZero(t, user.ID)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestUsers(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test_one", "golang")
 	assert.Nil(t, err)
@@ -1030,12 +1011,14 @@ func TestUsers(t *testing.T) {
 
 	users := db.Users()
 	assert.Len(t, users, 2)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestUsersWithFields(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test_one", "golang")
 	assert.Nil(t, err)
@@ -1047,60 +1030,71 @@ func TestUsersWithFields(t *testing.T) {
 	assert.Len(t, users, 2)
 	assert.NotEmpty(t, users[0].SavedCategoryUUID)
 	assert.NotEmpty(t, users[0].UncategorizedCategoryUUID)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestNewConflictingUsers(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test", "golang")
 	assert.Nil(t, err)
 
 	err = db.NewUser("test", "password")
 	assert.IsType(t, Conflict{}, err)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestSuccessfulAuthentication(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test", "golang")
 	assert.Nil(t, err)
 
-	user, err := db.UserFromName("test")
+	user, err := db.UserWithName("test")
 	assert.Nil(t, err)
 	assert.NotZero(t, user.ID)
 
 	user, err = db.Authenticate("test", "golang")
 	assert.Nil(t, err)
 	assert.NotZero(t, user.ID)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestBadPasswordAuthentication(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	err = db.NewUser("test", "golang")
 	assert.Nil(t, err)
 
-	user, err := db.UserFromName("test")
+	user, err := db.UserWithName("test")
 	assert.Nil(t, err)
 	assert.NotZero(t, user.ID)
 
 	user, err = db.Authenticate("test", "badpass")
 	assert.IsType(t, Unauthorized{}, err)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestBadUserAuthentication(t *testing.T) {
 	db, err := NewDB("sqlite3", TestDatabasePath)
 	require.Nil(t, err)
-	defer os.Remove(TestDatabasePath)
 
 	_, err = db.Authenticate("test", "golang")
 	assert.IsType(t, NotFound{}, err)
+
+	err = os.Remove(TestDatabasePath)
+	assert.Nil(t, err)
 }
 
 func TestDatabaseTestSuite(t *testing.T) {

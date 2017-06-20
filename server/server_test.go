@@ -58,7 +58,7 @@ func (suite *ServerTestSuite) SetupTest() {
 	suite.Nil(err)
 
 	suite.sync = sync.NewSync(&suite.db)
-	suite.server = NewServer(&suite.db, &suite.sync, conf.Server, conf.Security)
+	suite.server = NewServer(&suite.db, &suite.sync, conf.Server)
 	suite.server.handle.HideBanner = true
 
 	go suite.server.Start()
@@ -96,14 +96,14 @@ func (suite *ServerTestSuite) SetupTest() {
 	suite.NotEmpty(t.Token)
 
 	suite.token = t.Token
-	suite.user, err = suite.db.UserFromName("GoTest")
+	suite.user, err = suite.db.UserWithName("GoTest")
 	suite.Nil(err)
 }
 
 func (suite *ServerTestSuite) TearDownTest() {
 	suite.server.Stop()
 
-	os.Remove(suite.db.Path)
+	os.Remove(suite.db.Connection)
 }
 
 func (suite *ServerTestSuite) TestAddFeed() {
@@ -314,8 +314,6 @@ func (suite *ServerTestSuite) TestGetEntriesFromFeed() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -323,7 +321,7 @@ func (suite *ServerTestSuite) TestGetEntriesFromFeed() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncFeed(&feed)
+	err = suite.server.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
 	req, err := http.NewRequest("GET", "http://localhost:8080/v1/feeds/"+feed.UUID+"/entries", nil)
@@ -412,8 +410,6 @@ func (suite *ServerTestSuite) TestMarkFeed() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -421,7 +417,7 @@ func (suite *ServerTestSuite) TestMarkFeed() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncFeed(&feed)
+	err = suite.server.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
 	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Unread, &suite.user)
@@ -607,7 +603,7 @@ func (suite *ServerTestSuite) TestGetFeedsFromCategory() {
 	feed := models.Feed{
 		Title:        "Test feed",
 		Subscription: "http://localhost:8080",
-		CategoryUUID: category.UUID,
+		Category:     category,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -710,11 +706,8 @@ func (suite *ServerTestSuite) TestGetEntriesFromCategory() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 		Category:     category,
 		CategoryID:   category.ID,
-		CategoryUUID: category.UUID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -722,7 +715,7 @@ func (suite *ServerTestSuite) TestGetEntriesFromCategory() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncCategory(&category)
+	err = suite.server.sync.SyncCategory(&category, &suite.user)
 	suite.Require().Nil(err)
 
 	req, err := http.NewRequest("GET", "http://localhost:8080/v1/categories/"+category.UUID+"/entries", nil)
@@ -821,11 +814,8 @@ func (suite *ServerTestSuite) TestMarkCategory() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 		Category:     category,
 		CategoryID:   category.ID,
-		CategoryUUID: category.UUID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -833,7 +823,7 @@ func (suite *ServerTestSuite) TestMarkCategory() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncCategory(&category)
+	err = suite.server.sync.SyncCategory(&category, &suite.user)
 	suite.Require().Nil(err)
 
 	entries, err := suite.db.EntriesFromCategory(category.UUID, true, models.Unread, &suite.user)
@@ -930,8 +920,6 @@ func (suite *ServerTestSuite) TestGetEntries() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -939,7 +927,7 @@ func (suite *ServerTestSuite) TestGetEntries() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncFeed(&feed)
+	err = suite.server.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
 	req, err := http.NewRequest("GET", "http://localhost:8080/v1/entries", nil)
@@ -977,11 +965,10 @@ func (suite *ServerTestSuite) TestGetEntry() {
 	suite.Require().NotEmpty(feed.UUID)
 
 	entry := models.Entry{
-		Title:    "The Espionage Acts Troubling Origins",
-		Link:     "https://www.eff.org/deeplinks/2017/06/one-hundred-years-espionage-act",
-		Feed:     feed,
-		FeedID:   feed.ID,
-		FeedUUID: feed.UUID,
+		Title:  "The Espionage Acts Troubling Origins",
+		Link:   "https://www.eff.org/deeplinks/2017/06/one-hundred-years-espionage-act",
+		Feed:   feed,
+		FeedID: feed.ID,
 	}
 
 	err = suite.db.NewEntry(&entry, &suite.user)
@@ -1073,8 +1060,6 @@ func (suite *ServerTestSuite) TestMarkEntry() {
 
 	feed := models.Feed{
 		Subscription: ts.URL,
-		User:         suite.user,
-		UserID:       suite.user.ID,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -1082,7 +1067,7 @@ func (suite *ServerTestSuite) TestMarkEntry() {
 	suite.Require().NotZero(feed.ID)
 	suite.Require().NotEmpty(feed.UUID)
 
-	err = suite.server.sync.SyncFeed(&feed)
+	err = suite.server.sync.SyncFeed(&feed, &suite.user)
 	suite.Require().Nil(err)
 
 	entries, err := suite.db.EntriesFromFeed(feed.UUID, true, models.Read, &suite.user)
@@ -1128,13 +1113,12 @@ func (suite *ServerTestSuite) TestGetStatsForFeed() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Read,
+			Saved:  true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -1143,12 +1127,11 @@ func (suite *ServerTestSuite) TestGetStatsForFeed() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -1191,13 +1174,12 @@ func (suite *ServerTestSuite) TestGetStats() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Read,
+			Saved:  true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -1206,12 +1188,11 @@ func (suite *ServerTestSuite) TestGetStats() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -1256,7 +1237,6 @@ func (suite *ServerTestSuite) TestGetStatsForCategory() {
 		Subscription: "http://example.com",
 		Category:     category,
 		CategoryID:   category.ID,
-		CategoryUUID: category.UUID,
 	}
 
 	err = suite.db.NewFeed(&feed, &suite.user)
@@ -1265,13 +1245,12 @@ func (suite *ServerTestSuite) TestGetStatsForCategory() {
 
 	for i := 0; i < 3; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Read,
-			Saved:    true,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Read,
+			Saved:  true,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
@@ -1280,12 +1259,11 @@ func (suite *ServerTestSuite) TestGetStatsForCategory() {
 
 	for i := 0; i < 7; i++ {
 		entry := models.Entry{
-			Title:    "Item",
-			Link:     "http://example.com",
-			Feed:     feed,
-			FeedID:   feed.ID,
-			FeedUUID: feed.UUID,
-			Mark:     models.Unread,
+			Title:  "Item",
+			Link:   "http://example.com",
+			Feed:   feed,
+			FeedID: feed.ID,
+			Mark:   models.Unread,
 		}
 
 		err = suite.db.NewEntry(&entry, &suite.user)
