@@ -95,8 +95,8 @@ type (
 
 		UUID string `json:"id"`
 
-		Category   Category `json:"-"`
-		CategoryID uint     `json:"-"`
+		Category   Category
+		CategoryID uint `json:"-"`
 
 		User   User `json:"-"`
 		UserID uint `json:"-"`
@@ -111,7 +111,6 @@ type (
 		Etag         string    `json:"-"`
 		LastUpdated  time.Time `json:"-"`
 		Status       string    `json:"status,omitempty"`
-		CategoryUUID string    `json:"category,optional"`
 	}
 
 	Tag struct {
@@ -136,7 +135,7 @@ type (
 		User   User `json:"-"`
 		UserID uint `json:"-"`
 
-		Feed   Feed `json:"-"`
+		Feed   Feed
 		FeedID uint `json:"-"`
 
 		Tags []Tag `json:"-"`
@@ -149,7 +148,6 @@ type (
 		Published   time.Time `json:"published"`
 		Saved       bool      `json:"isSaved"`
 		Mark        Marker    `json:"markedAs"`
-		FeedUUID    string    `json:"feed,omitempty" gorm:"-"`
 	}
 
 	Stats struct {

@@ -272,7 +272,7 @@ func (s *Server) GetEntriesFromFeed(c echo.Context) error {
 	feed.User = user
 	feed.UserID = user.ID
 	if params.Update && params.Saved == true && withMarker == models.Unread {
-		s.sync.SyncFeed(&feed)
+		s.sync.SyncFeed(&feed, &user)
 	}
 
 	entries, err := s.db.EntriesFromFeed(feed.UUID, true, withMarker, &user)
@@ -313,7 +313,7 @@ func (s *Server) GetEntriesFromCategory(c echo.Context) error {
 	ctg.User = user
 	ctg.UserID = user.ID
 	if params.Update && params.Saved == true && withMarker == models.Unread {
-		err = s.sync.SyncCategory(&ctg)
+		err = s.sync.SyncCategory(&ctg, &user)
 		if err != nil {
 			return newError(err, &c)
 		}
@@ -339,7 +339,7 @@ func (s *Server) GetFeedsFromCategory(c echo.Context) error {
 		return echo.ErrUnauthorized
 	}
 
-	feeds, err := s.db.FeedsFromCategory(&user, c.Param("categoryID"))
+	feeds, err := s.db.FeedsFromCategory(c.Param("categoryID"), &user)
 	if err != nil {
 		return newError(err, &c)
 	}
@@ -601,7 +601,7 @@ func (s *Server) GetStatsForEntries(c echo.Context) error {
 func (s *Server) getUser(c *echo.Context) (models.User, error) {
 	userClaim := (*c).Get("user").(*jwt.Token)
 	claims := userClaim.Claims.(jwt.MapClaims)
-	user, err := s.db.UserFromID(claims["id"].(string))
+	user, err := s.db.UserWithUUID(claims["id"].(string))
 	if err != nil {
 		return models.User{}, err
 	}
@@ -673,7 +673,7 @@ func (s *Server) registerHandlers() {
 }
 
 func newError(err error, c *echo.Context) error {
-	if dbErr, ok := err.(database.DatabaseError); ok {
+	if dbErr, ok := err.(database.DBError); ok {
 		return (*c).JSON(dbErr.Code(), ErrorResp{
 			Reason:  dbErr.String(),
 			Message: dbErr.Error(),
