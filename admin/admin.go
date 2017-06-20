@@ -33,14 +33,6 @@ import (
 
 const DefaultSocketPath = "/var/run/syndication/control"
 
-var (
-	commands = []string{
-		"CreateUser",
-		"DeleteUser",
-		"NewUser",
-	}
-)
-
 type State int
 
 const (

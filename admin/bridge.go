@@ -51,18 +51,38 @@ func (br *Bridge) NewUser(args map[string]interface{}) error {
 	return br.db.NewUser(username, password)
 }
 
-/*
 func (br *Bridge) DeleteUser(args map[string]interface{}) error {
-	var username string
+	var userID string
 
-	username, err := getUser(args)
-	if err != nil {
-		return err
+	aVal := reflect.ValueOf(args["userID"])
+	if aVal.IsValid() && aVal.Kind() == reflect.String {
+		userID = aVal.String()
+	} else {
+		return errors.New("Invalid Param")
 	}
 
-	return br.db.DeleteUser(username)
+	return br.db.DeleteUser(userID)
 }
-*/
+
+func (br *Bridge) ChangeUserName(args map[string]interface{}) error {
+	return nil
+}
+
+func (br *Bridge) ChangeUserPassword(args map[string]interface{}) error {
+	return nil
+}
+
+func (br *Bridge) GetUsers(args map[string]interface{}) error {
+	return nil
+}
+
+func (br *Bridge) GetUser(args map[string]interface{}) error {
+	return nil
+}
+
+func (br *Bridge) AssignNewAPIKey(args map[string]interface{}) error {
+	return nil
+}
 
 func getUser(args map[string]interface{}) (string, error) {
 	aVal := reflect.ValueOf(args["username"])

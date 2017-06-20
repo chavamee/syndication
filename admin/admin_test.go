@@ -58,7 +58,7 @@ func (suite *AdminTestSuite) TearDownTest() {
 	suite.conn.Close()
 	suite.db.Close()
 
-	os.Remove(suite.db.Path)
+	os.Remove(suite.db.Connection)
 }
 
 func (suite *AdminTestSuite) TestNewUser() {

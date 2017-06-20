@@ -62,6 +62,7 @@ func NewDB(dbType, conn string) (db DB, err error) {
 	gormDB.AutoMigrate(&models.User{})
 	gormDB.AutoMigrate(&models.Entry{})
 	gormDB.AutoMigrate(&models.Tag{})
+	gormDB.AutoMigrate(&models.APIKey{})
 
 	db.db = gormDB
 
@@ -73,20 +74,29 @@ func (db *DB) Close() error {
 	return db.db.Close()
 }
 
+func createPasswordHashAndSalt(password string) (hash []byte, salt []byte, err error) {
+	salt = make([]byte, PWSaltBytes)
+	_, err = io.ReadFull(rand.Reader, salt)
+	if err != nil {
+		return
+	}
+
+	hash, err = scrypt.Key([]byte(password), salt, 1<<14, 8, 1, PWHashBytes)
+	if err != nil {
+		return
+	}
+
+	return
+}
+
 // NewUser creates a new User object
 func (db *DB) NewUser(username, password string) error {
 	user := &models.User{}
-	if !db.db.Where("username = ?", username).First(&user).RecordNotFound() {
+	if !db.db.Where("username = ?", username).First(user).RecordNotFound() {
 		return Conflict{"User already exists"}
 	}
 
-	salt := make([]byte, PWSaltBytes)
-	_, err := io.ReadFull(rand.Reader, salt)
-	if err != nil {
-		return err
-	}
-
-	hash, err := scrypt.Key([]byte(password), salt, 1<<14, 8, 1, PWHashBytes)
+	hash, salt, err := createPasswordHashAndSalt(password)
 	if err != nil {
 		return err
 	}
@@ -112,6 +122,46 @@ func (db *DB) NewUser(username, password string) error {
 	user.Username = username
 
 	db.db.Create(&user).Related(&user.Categories)
+	return nil
+}
+
+// DeleteUser deletes a User object
+func (db *DB) DeleteUser(userID string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	db.db.Delete(user)
+	return nil
+}
+
+// ChangeUserName for user with userID
+func (db *DB) ChangeUserName(userID, username string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	db.db.Model(user).Update("username", username)
+	return nil
+}
+
+func (db *DB) ResetPassword(userID, password string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	hash, salt, err := createPasswordHashAndSalt(password)
+	if err != nil {
+		return err
+	}
+
+	db.db.Model(user).Update(models.User{
+		PasswordHash: hash,
+		PasswordSalt: salt,
+	})
 	return nil
 }
 
