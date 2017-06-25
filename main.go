@@ -68,15 +68,15 @@ func main() {
 			}
 		}
 
-		dbImpl, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
+		db, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
 		if err != nil {
 			return err
 		}
-		sync := sync.NewSync(&dbImpl)
+		sync := sync.NewSync(db)
 		sync.Start()
 
 		conf.Admin.AdminSocketPath = "/tmp/syndication"
-		adminSocket, err := admin.NewAdminSocket(&dbImpl, conf.Admin.AdminSocketPath)
+		adminSocket, err := admin.NewAdminSocket(db, conf.Admin.AdminSocketPath)
 		if err != nil {
 			return err
 		}
@@ -84,7 +84,7 @@ func main() {
 
 		defer adminSocket.Stop()
 
-		server := server.NewServer(&dbImpl, &sync, conf.Server)
+		server := server.NewServer(db, sync, conf.Server)
 		server.Start()
 
 		return err

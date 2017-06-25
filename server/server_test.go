@@ -27,62 +27,61 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/chavamee/syndication/config"
 	"github.com/chavamee/syndication/database"
 	"github.com/chavamee/syndication/models"
 	"github.com/chavamee/syndication/sync"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+const TestDBPath = "/tmp/syndication-test.db"
 
 type (
 	ServerTestSuite struct {
 		suite.Suite
 
-		db     database.DB
-		sync   sync.Sync
-		server Server
+		db     *database.DB
+		sync   *sync.Sync
+		server *Server
 		user   models.User
 		token  string
+		ts     *httptest.Server
 	}
 )
 
 func (suite *ServerTestSuite) SetupTest() {
-	dbPath := "/tmp/syndication-test.db"
-	dbType := "sqlite3"
-
 	conf := config.NewDefaultConfig()
 
 	var err error
-	suite.db, err = database.NewDB(dbType, dbPath)
-	suite.Nil(err)
+	suite.db, err = database.NewDB("sqlite3", TestDBPath)
+	suite.Require().Nil(err)
 
-	suite.sync = sync.NewSync(&suite.db)
-	suite.server = NewServer(&suite.db, &suite.sync, conf.Server)
-	suite.server.handle.HideBanner = true
+	suite.sync = sync.NewSync(suite.db)
 
-	go suite.server.Start()
+	if suite.server == nil {
+		suite.server = NewServer(suite.db, suite.sync, conf.Server)
+		suite.server.handle.HideBanner = true
+		go suite.server.Start()
+	}
+
+	time.Sleep(10000)
 
 	resp, err := http.PostForm("http://localhost:8080/v1/register",
 		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
+	suite.Require().Nil(err)
+
+	suite.Equal(204, resp.StatusCode)
+
+	err = resp.Body.Close()
 	suite.Nil(err)
-
-	suite.Equal(resp.StatusCode, 204)
-
-	users := suite.db.Users("username")
-	suite.Len(users, 1)
-
-	suite.Equal(users[0].Username, "GoTest")
-	suite.NotEmpty(users[0].ID)
-	suite.NotEmpty(users[0].UUID)
-
-	resp.Body.Close()
 
 	resp, err = http.PostForm("http://localhost:8080/v1/login",
 		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
-	suite.Nil(err)
-
-	defer resp.Body.Close()
+	suite.Require().Nil(err)
 
 	suite.Equal(resp.StatusCode, 200)
 
@@ -92,21 +91,83 @@ func (suite *ServerTestSuite) SetupTest() {
 
 	var t Token
 	err = json.NewDecoder(resp.Body).Decode(&t)
-	suite.Nil(err)
-	suite.NotEmpty(t.Token)
+	suite.Require().Nil(err)
+	suite.Require().NotEmpty(t.Token)
 
 	suite.token = t.Token
+
 	suite.user, err = suite.db.UserWithName("GoTest")
+	suite.Require().Nil(err)
+
+	err = resp.Body.Close()
 	suite.Nil(err)
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `<rss>
+		<channel>
+    <title>RSS Test</title>
+    <link>http://localhost:8080</link>
+    <description>Testing rss feeds</description>
+    <language>en</language>
+    <lastBuildDate></lastBuildDate>
+    <item>
+      <title>Item 1</title>
+      <link>http://localhost:8080/item_1</link>
+      <description>Single test item</description>
+      <author>chavamee</author>
+      <guid>item1@test</guid>
+      <pubDate></pubDate>
+      <source>http://localhost:8080/rss.xml</source>
+    </item>
+    <item>
+      <title>Item 2</title>
+      <link>http://localhost:8080/item_2</link>
+      <description>Single test item</description>
+      <author>chavamee</author>
+      <guid>item2@test</guid>
+      <pubDate></pubDate>
+      <source>http://localhost:8080/rss.xml</source>
+    </item>
+    <item>
+      <title>Item 3</title>
+      <link>http://localhost:8080/item_3</link>
+      <description>Single test item</description>
+      <author>chavamee</author>
+      <guid>item3@test</guid>
+      <pubDate></pubDate>
+      <source>http://localhost:8080/rss.xml</source>
+    </item>
+    <item>
+      <title>Item 4</title>
+      <link>http://localhost:8080/item_4</link>
+      <description>Single test item</description>
+      <author>chavamee</author>
+      <guid>item4@test</guid>
+      <pubDate></pubDate>
+      <source>http://localhost:8080/rss.xml</source>
+    </item>
+    <item>
+      <title>Item 5</title>
+      <link>http://localhost:8080/item_5</link>
+      <description>Single test item</description>
+      <author>chavamee</author>
+      <guid>item5@test</guid>
+      <pubDate></pubDate>
+      <source>http://localhost:8080/rss.xml</source>
+    </item>
+		</channel>
+		</rss>`)
+	}
+
+	suite.ts = httptest.NewServer(http.HandlerFunc(handler))
 }
 
 func (suite *ServerTestSuite) TearDownTest() {
-	suite.server.Stop()
-
-	os.Remove(suite.db.Connection)
+	suite.db.DeleteAll()
+	suite.ts.Close()
 }
 
-func (suite *ServerTestSuite) TestAddFeed() {
+func (suite *ServerTestSuite) TestNewFeed() {
 	payload := []byte(`{"title":"EFF", "subscription": "https://www.eff.org/rss/updates.xml"}`)
 	req, err := http.NewRequest("POST", "http://localhost:8080/v1/feeds", bytes.NewBuffer(payload))
 	suite.Require().Nil(err)
@@ -252,68 +313,8 @@ func (suite *ServerTestSuite) TestDeleteFeed() {
 }
 
 func (suite *ServerTestSuite) TestGetEntriesFromFeed() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -348,68 +349,8 @@ func (suite *ServerTestSuite) TestGetEntriesFromFeed() {
 }
 
 func (suite *ServerTestSuite) TestMarkFeed() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -451,7 +392,7 @@ func (suite *ServerTestSuite) TestMarkFeed() {
 	suite.Require().Len(entries, 5)
 }
 
-func (suite *ServerTestSuite) TestAddCategory() {
+func (suite *ServerTestSuite) TestNewCategory() {
 	payload := []byte(`{"name": "News"}`)
 	req, err := http.NewRequest("POST", "http://localhost:8080/v1/categories", bytes.NewBuffer(payload))
 	suite.Require().Nil(err)
@@ -633,66 +574,6 @@ func (suite *ServerTestSuite) TestGetFeedsFromCategory() {
 }
 
 func (suite *ServerTestSuite) TestGetEntriesFromCategory() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	category := models.Category{
 		Name:   "News",
 		User:   suite.user,
@@ -705,7 +586,7 @@ func (suite *ServerTestSuite) TestGetEntriesFromCategory() {
 	suite.Require().NotZero(category.ID)
 
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 		Category:     category,
 		CategoryID:   category.ID,
 	}
@@ -742,66 +623,6 @@ func (suite *ServerTestSuite) TestGetEntriesFromCategory() {
 }
 
 func (suite *ServerTestSuite) TestMarkCategory() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	category := models.Category{
 		Name:   "News",
 		User:   suite.user,
@@ -813,7 +634,7 @@ func (suite *ServerTestSuite) TestMarkCategory() {
 	suite.Require().NotEmpty(category.UUID)
 
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 		Category:     category,
 		CategoryID:   category.ID,
 	}
@@ -858,68 +679,8 @@ func (suite *ServerTestSuite) TestMarkCategory() {
 }
 
 func (suite *ServerTestSuite) TestGetEntries() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -998,68 +759,8 @@ func (suite *ServerTestSuite) TestGetEntry() {
 }
 
 func (suite *ServerTestSuite) TestMarkEntry() {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<rss>
-		<channel>
-    <title>RSS Test</title>
-    <link>http://localhost:8080</link>
-    <description>Testing rss feeds</description>
-    <language>en</language>
-    <lastBuildDate></lastBuildDate>
-    <item>
-      <title>Item 1</title>
-      <link>http://localhost:8080/item_1</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item1@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 2</title>
-      <link>http://localhost:8080/item_2</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item2@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 3</title>
-      <link>http://localhost:8080/item_3</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item3@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 4</title>
-      <link>http://localhost:8080/item_4</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item4@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-    <item>
-      <title>Item 5</title>
-      <link>http://localhost:8080/item_5</link>
-      <description>Single test item</description>
-      <author>chavamee</author>
-      <guid>item5@test</guid>
-      <pubDate></pubDate>
-      <source>http://localhost:8080/rss.xml</source>
-    </item>
-		</channel>
-		</rss>`)
-	}
-
-	ts := httptest.NewServer(http.HandlerFunc(handler))
-	defer ts.Close()
-
 	feed := models.Feed{
-		Subscription: ts.URL,
+		Subscription: suite.ts.URL,
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -1298,6 +999,100 @@ func (suite *ServerTestSuite) TestAddFeedsToCategory() {
 
 }
 
+func TestServerRegister(t *testing.T) {
+	conf := config.NewDefaultConfig()
+
+	db, err := database.NewDB("sqlite3", TestDBPath)
+	require.NotNil(t, db)
+	require.Nil(t, err)
+
+	sync := sync.NewSync(db)
+	require.NotNil(t, sync)
+
+	server := NewServer(db, sync, conf.Server)
+	server.handle.HideBanner = true
+
+	go func() {
+		server.Start()
+	}()
+
+	time.Sleep(1000)
+
+	regResp, err := http.PostForm("http://localhost:8080/v1/register",
+		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
+	require.Nil(t, err)
+
+	assert.Equal(t, 204, regResp.StatusCode)
+
+	users := db.Users("username")
+	assert.Len(t, users, 1)
+
+	assert.Equal(t, "GoTest", users[0].Username)
+	assert.NotEmpty(t, users[0].ID)
+	assert.NotEmpty(t, users[0].UUID)
+
+	err = regResp.Body.Close()
+	require.Nil(t, err)
+
+	server.Stop()
+	err = os.Remove(db.Connection)
+	assert.Nil(t, err)
+}
+
+func TestServerLogin(t *testing.T) {
+	conf := config.NewDefaultConfig()
+
+	db, err := database.NewDB("sqlite3", TestDBPath)
+	require.Nil(t, err)
+
+	sync := sync.NewSync(db)
+
+	server := NewServer(db, sync, conf.Server)
+	server.handle.HideBanner = true
+
+	go func() {
+		server.Start()
+	}()
+
+	time.Sleep(1000)
+
+	regResp, err := http.PostForm("http://localhost:8080/v1/register",
+		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
+	require.Nil(t, err)
+
+	assert.Equal(t, 204, regResp.StatusCode)
+
+	err = regResp.Body.Close()
+	require.Nil(t, err)
+
+	loginResp, err := http.PostForm("http://localhost:8080/v1/login",
+		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
+	require.Nil(t, err)
+
+	assert.Equal(t, 200, loginResp.StatusCode)
+
+	type Token struct {
+		Token string `json:"token"`
+	}
+
+	var token Token
+	err = json.NewDecoder(loginResp.Body).Decode(&token)
+	require.Nil(t, err)
+	assert.NotEmpty(t, token.Token)
+
+	_, err = db.UserWithName("GoTest")
+	assert.Nil(t, err)
+
+	err = loginResp.Body.Close()
+	assert.Nil(t, err)
+
+	server.Stop()
+	err = os.Remove(db.Connection)
+	assert.Nil(t, err)
+}
+
 func TestServerTestSuite(t *testing.T) {
-	suite.Run(t, new(ServerTestSuite))
+	serverSuite := new(ServerTestSuite)
+	suite.Run(t, serverSuite)
+	serverSuite.server.Stop()
 }

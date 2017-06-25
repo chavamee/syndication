@@ -33,10 +33,13 @@ const (
 
 type (
 	Server struct {
-		AuthSecret            string `toml:"auth_secret"`
-		AuthSecreteFilePath   string `toml:"auth_secret_file_path"`
-		EnableRequestLogs     bool   `toml:"enable_http_requests_log"`
-		EnablePanicPrintStack bool   `toml:"enable_panic_print_stack"`
+		AuthSecret            string        `toml:"auth_secret"`
+		AuthSecreteFilePath   string        `toml:"auth_secret_file_path"`
+		EnableRequestLogs     bool          `toml:"enable_http_requests_log"`
+		EnablePanicPrintStack bool          `toml:"enable_panic_print_stack"`
+		MaxShutdownTime       int           `toml:"max_shutdown_time"`
+		Port                  int           `toml:"port"`
+		ShutdownTimeout       time.Duration `toml:"shutdown_timeout"`
 	}
 
 	Database struct {
