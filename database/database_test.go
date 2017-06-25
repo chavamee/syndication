@@ -33,7 +33,7 @@ type (
 	DatabaseTestSuite struct {
 		suite.Suite
 
-		db   DB
+		db   *DB
 		user models.User
 	}
 )
@@ -43,6 +43,7 @@ const TestDatabasePath = "/tmp/syndication-test.db"
 func (suite *DatabaseTestSuite) SetupTest() {
 	var err error
 	suite.db, err = NewDB("sqlite3", TestDatabasePath)
+	suite.Require().NotNil(suite.db)
 	suite.Require().Nil(err)
 
 	err = suite.db.NewUser("test", "golang")
@@ -972,6 +973,30 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 	suite.Equal(3, stats.Saved)
 	suite.Equal(10, stats.Total)
 }
+
+func (suite *DatabaseTestSuite) TestKeyBelongsToUser() {
+	key := models.APIKey{
+		Key: "123456789",
+	}
+
+	err := suite.db.NewAPIKey(&key, &suite.user)
+	suite.Require().Nil(err)
+
+	found, err := suite.db.KeyBelongsToUser(&key, &suite.user)
+	suite.Require().Nil(err)
+	suite.True(found)
+}
+
+func (suite *DatabaseTestSuite) TestKeyDoesNotBelongToUser() {
+	key := models.APIKey{
+		Key: "123456789",
+	}
+
+	found, err := suite.db.KeyBelongsToUser(&key, &suite.user)
+	suite.Require().Nil(err)
+	suite.False(found)
+}
+
 func TestNewDB(t *testing.T) {
 	_, err := NewDB("sqlite3", TestDatabasePath)
 	assert.Nil(t, err)

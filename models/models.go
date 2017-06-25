@@ -63,6 +63,7 @@ type (
 		Categories []Category `json:"categories,optional"`
 		Feeds      []Feed
 		Entries    []Entry
+		APIKeys    []APIKey
 
 		Username                  string `json:"username,required"`
 		Email                     string `json:"email,optional"`
@@ -155,5 +156,16 @@ type (
 		Read   int `json:"read"`
 		Saved  int `json:"saved"`
 		Total  int `json:"total"`
+	}
+
+	APIKey struct {
+		ID        uint      `json:"-" gorm:"primary_key"`
+		CreatedAt time.Time `json:"created_at,omitempty"`
+		UpdatedAt time.Time `json:"updated_at,omitempty"`
+
+		Key string
+
+		User   User
+		UserID int
 	}
 )
