@@ -48,14 +48,16 @@ type DB struct {
 }
 
 // NewDB creates a new DB instance
-func NewDB(dbType, conn string) (db DB, err error) {
+func NewDB(dbType, conn string) (db *DB, err error) {
 	gormDB, err := gorm.Open(dbType, conn)
 	if err != nil {
 		return
 	}
 
-	db.Connection = conn
-	db.Type = dbType
+	db = &DB{
+		Connection: conn,
+		Type:       dbType,
+	}
 
 	gormDB.AutoMigrate(&models.Feed{})
 	gormDB.AutoMigrate(&models.Category{})
@@ -175,6 +177,27 @@ func (db *DB) Authenticate(username, password string) (user models.User, err err
 	return
 }
 
+func (db *DB) NewAPIKey(key *models.APIKey, user *models.User) error {
+	if key.Key == "" {
+		return BadRequest{"No key provided"}
+	}
+
+	db.db.Model(user).Association("APIKeys").Append(key)
+
+	return nil
+}
+
+func (db *DB) KeyBelongsToUser(key *models.APIKey, user *models.User) (bool, error) {
+	if key.Key == "" {
+		return false, BadRequest{"No key provided"}
+	}
+
+	db.Authenticate("", "")
+
+	found := !db.db.Model(user).Where("key = ?", key.Key).Related(&models.APIKey{}).RecordNotFound()
+	return found, nil
+}
+
 // NewFeed creates a new Feed object owned by user
 func (db *DB) NewFeed(feed *models.Feed, user *models.User) error {
 	feed.UUID = uuid.NewV4().String()
@@ -251,6 +274,10 @@ func (db *DB) EditFeed(feed *models.Feed, user *models.User) error {
 
 // NewCategory creates a new Category object owned by user
 func (db *DB) NewCategory(ctg *models.Category, user *models.User) error {
+	if ctg.Name == "" {
+		return BadRequest{"Category name should not be empty"}
+	}
+
 	tmpCtg := &models.Category{}
 	if db.db.Model(user).Where("name = ?", ctg.Name).Related(tmpCtg).RecordNotFound() {
 		ctg.UUID = uuid.NewV4().String()
@@ -559,4 +586,14 @@ func (db *DB) MarkEntry(id string, marker models.Marker, user *models.User) erro
 
 	db.db.Model(&entry).Update(models.Entry{Mark: marker})
 	return nil
+}
+
+// DeleteAll records in the database
+func (db *DB) DeleteAll() {
+	db.db.Delete(&models.Feed{})
+	db.db.Delete(&models.Category{})
+	db.db.Delete(&models.User{})
+	db.db.Delete(&models.Entry{})
+	db.db.Delete(&models.Tag{})
+	db.db.Delete(&models.APIKey{})
 }

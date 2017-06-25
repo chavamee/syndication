@@ -41,8 +41,8 @@ type (
 		suite.Suite
 
 		user   models.User
-		db     database.DB
-		sync   Sync
+		db     *database.DB
+		sync   *Sync
 		server *http.Server
 	}
 )
@@ -73,7 +73,7 @@ func (suite *SyncTestSuite) SetupTest() {
 		suite.server.ListenAndServe()
 	}()
 
-	suite.sync = NewSync(&suite.db)
+	suite.sync = NewSync(suite.db)
 }
 
 func (suite *SyncTestSuite) TearDownTest() {

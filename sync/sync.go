@@ -205,8 +205,8 @@ func (s *Sync) Stop() {
 	s.cronChannel <- true
 }
 
-func NewSync(db *database.DB) Sync {
-	return Sync{
+func NewSync(db *database.DB) *Sync {
+	return &Sync{
 		db:        db,
 		scheduler: gocron.NewScheduler(),
 	}
