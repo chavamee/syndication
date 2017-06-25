@@ -177,6 +177,7 @@ func (db *DB) Authenticate(username, password string) (user models.User, err err
 	return
 }
 
+// NewAPIKey creates a new APIKey object owned by user
 func (db *DB) NewAPIKey(key *models.APIKey, user *models.User) error {
 	if key.Key == "" {
 		return BadRequest{"No key provided"}
@@ -187,12 +188,11 @@ func (db *DB) NewAPIKey(key *models.APIKey, user *models.User) error {
 	return nil
 }
 
+// KeyBelongsToUser returns true if the given APIKey is owned by user
 func (db *DB) KeyBelongsToUser(key *models.APIKey, user *models.User) (bool, error) {
 	if key.Key == "" {
 		return false, BadRequest{"No key provided"}
 	}
-
-	db.Authenticate("", "")
 
 	found := !db.db.Model(user).Where("key = ?", key.Key).Related(&models.APIKey{}).RecordNotFound()
 	return found, nil
