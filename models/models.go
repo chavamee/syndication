@@ -18,7 +18,6 @@
 package models
 
 import (
-	"github.com/jinzhu/gorm"
 	"strings"
 	"time"
 )
@@ -56,18 +55,20 @@ func MarkerFromString(marker string) Marker {
 
 type (
 	User struct {
-		gorm.Model
+		ID        uint       `json:"-" gorm:"primary_key"`
+		CreatedAt time.Time  `json:"created_at,omitempty"`
+		UpdatedAt time.Time  `json:"updated_at,omitempty"`
+		DeletedAt *time.Time `json:"deleted_at,omitempty" sql:"index"`
 
 		UUID string `json:"id"`
 
-		Categories []Category `json:"categories,optional"`
-		Feeds      []Feed
-		Entries    []Entry
-		APIKeys    []APIKey
+		Categories []Category `json:"categories,omitempty"`
+		Feeds      []Feed     `json:"feeds,omitempty"`
+		Entries    []Entry    `json:"entries,omitempty"`
+		APIKeys    []APIKey   `json:"-"`
 
 		Username                  string `json:"username,required"`
 		Email                     string `json:"email,optional"`
-		Password                  string `json:"password,required" sql:"-"`
 		PasswordHash              []byte `json:"-"`
 		PasswordSalt              []byte `json:"-"`
 		UncategorizedCategoryUUID string `json:"-"`

@@ -75,14 +75,13 @@ func main() {
 		sync := sync.NewSync(db)
 		sync.Start()
 
-		conf.Admin.AdminSocketPath = "/tmp/syndication"
-		adminSocket, err := admin.NewAdminSocket(db, conf.Admin.AdminSocketPath)
+		admin, err := admin.NewAdmin(db, conf.Admin.SocketPath)
 		if err != nil {
 			return err
 		}
-		adminSocket.Start()
+		admin.Start()
 
-		defer adminSocket.Stop()
+		defer admin.Stop(true)
 
 		server := server.NewServer(db, sync, conf.Server)
 		server.Start()

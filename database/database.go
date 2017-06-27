@@ -139,23 +139,24 @@ func (db *DB) DeleteUser(userID string) error {
 }
 
 // ChangeUserName for user with userID
-func (db *DB) ChangeUserName(userID, username string) error {
+func (db *DB) ChangeUserName(userID, newName string) error {
 	user := &models.User{}
 	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
 		return BadRequest{"User does not exists"}
 	}
 
-	db.db.Model(user).Update("username", username)
+	db.db.Model(user).Update("username", newName)
 	return nil
 }
 
-func (db *DB) ResetPassword(userID, password string) error {
+// ChangeUserPassword for user with userID
+func (db *DB) ChangeUserPassword(userID, newPassword string) error {
 	user := &models.User{}
 	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
 		return BadRequest{"User does not exists"}
 	}
 
-	hash, salt, err := createPasswordHashAndSalt(password)
+	hash, salt, err := createPasswordHashAndSalt(newPassword)
 	if err != nil {
 		return err
 	}

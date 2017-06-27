@@ -40,6 +40,7 @@ type (
 		MaxShutdownTime       int           `toml:"max_shutdown_time"`
 		Port                  int           `toml:"port"`
 		ShutdownTimeout       time.Duration `toml:"shutdown_timeout"`
+		APIKeyExpiration      time.Duration `toml:"api_key_expiration"`
 	}
 
 	Database struct {
@@ -54,7 +55,8 @@ type (
 	}
 
 	Admin struct {
-		AdminSocketPath string `toml:"socket_path"`
+		SocketPath     string `toml:"socket_path"`
+		MaxConnections string `toml:"max_connections"`
 	}
 
 	Config struct {
