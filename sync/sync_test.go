@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-const TestDatabasePath = "/tmp/syndication-test.db"
+const TestDatabasePath = "/tmp/syndication-test-sync.db"
 
 const RSSFeedEtag = "123456"
 
@@ -49,7 +49,7 @@ type (
 
 func (suite *SyncTestSuite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("If-None-Match") != RSSFeedEtag {
-		http.FileServer(http.Dir(".")).ServeHTTP(w, r)
+		http.FileServer(http.Dir(os.Getenv("GOPATH")+"/src/github.com/chavamee/syndication/sync/")).ServeHTTP(w, r)
 	}
 }
 
@@ -65,7 +65,7 @@ func (suite *SyncTestSuite) SetupTest() {
 	suite.Require().Nil(err)
 
 	suite.server = &http.Server{
-		Addr:    ":8080",
+		Addr:    ":8090",
 		Handler: suite,
 	}
 
@@ -83,7 +83,7 @@ func (suite *SyncTestSuite) TearDownTest() {
 }
 
 func (suite *SyncTestSuite) TestFetchFeed() {
-	f, err := ioutil.ReadFile("rss.xml")
+	f, err := ioutil.ReadFile(os.Getenv("GOPATH") + "/src/github.com/chavamee/syndication/sync/rss.xml")
 	suite.Require().Nil(err)
 
 	fp := gofeed.NewParser()
@@ -92,7 +92,7 @@ func (suite *SyncTestSuite) TestFetchFeed() {
 	suite.Require().Nil(err)
 
 	feed := &models.Feed{
-		Subscription: "http://localhost:8080/rss.xml",
+		Subscription: "http://localhost:8090/rss.xml",
 	}
 	err = FetchFeed(feed)
 	suite.Require().Nil(err)
@@ -104,7 +104,7 @@ func (suite *SyncTestSuite) TestFetchFeed() {
 func (suite *SyncTestSuite) TestFeedWithNonMatchingEtag() {
 	feed := models.Feed{
 		Title:        "Sync Test",
-		Subscription: "http://localhost:8080/rss.xml",
+		Subscription: "http://localhost:8090/rss.xml",
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -122,7 +122,7 @@ func (suite *SyncTestSuite) TestFeedWithNonMatchingEtag() {
 func (suite *SyncTestSuite) TestFeedWithMatchingEtag() {
 	feed := models.Feed{
 		Title:        "Sync Test",
-		Subscription: "http://localhost:8080/rss.xml",
+		Subscription: "http://localhost:8090/rss.xml",
 		Etag:         RSSFeedEtag,
 	}
 
@@ -144,7 +144,7 @@ func (suite *SyncTestSuite) TestFeedWithLastBuildDate() {
 func (suite *SyncTestSuite) TestFeedWithNewEntriesWithGUIDs() {
 	feed := models.Feed{
 		Title:        "Sync Test",
-		Subscription: "http://localhost:8080/rss.xml",
+		Subscription: "http://localhost:8090/rss.xml",
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)
@@ -171,7 +171,7 @@ func (suite *SyncTestSuite) TestFeedWithNewEntriesWithGUIDs() {
 func (suite *SyncTestSuite) TestFeedWithNewEntriesWithoutGUIDs() {
 	feed := models.Feed{
 		Title:        "Sync Test",
-		Subscription: "http://localhost:8080/rss_minimal.xml",
+		Subscription: "http://localhost:8090/rss_minimal.xml",
 	}
 
 	err := suite.db.NewFeed(&feed, &suite.user)

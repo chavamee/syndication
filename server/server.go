@@ -22,7 +22,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -395,13 +394,11 @@ func (s *Server) NewCategory(c echo.Context) error {
 
 	ctg := models.Category{}
 	if err = c.Bind(&ctg); err != nil {
-		fmt.Println(err)
 		return echo.NewHTTPError(http.StatusBadRequest)
 	}
 
 	err = s.db.NewCategory(&ctg, &user)
 	if err != nil {
-		fmt.Println(err)
 		return newError(err, &c)
 	}
 

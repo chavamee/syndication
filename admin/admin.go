@@ -358,10 +358,7 @@ func (a *Admin) listen() {
 			break
 		case stopping:
 			for _, conn := range a.connections {
-				err := conn.Close()
-				if err != nil {
-					log.Error(err)
-				}
+				conn.Close()
 			}
 
 			shouldStop = true

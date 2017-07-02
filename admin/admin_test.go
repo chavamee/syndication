@@ -39,9 +39,11 @@ type (
 	}
 )
 
+const TestDBPath = "/tmp/syndication-test-admin.db"
+
 func (suite *AdminTestSuite) SetupTest() {
 	var err error
-	suite.db, err = database.NewDB("sqlite3", "/tmp/syndication-test.db")
+	suite.db, err = database.NewDB("sqlite3", TestDBPath)
 	suite.Nil(err)
 
 	suite.socketPath = "/tmp/syndication.socket"
