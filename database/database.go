@@ -48,20 +48,23 @@ type DB struct {
 }
 
 // NewDB creates a new DB instance
-func NewDB(dbType, conn string) (db DB, err error) {
+func NewDB(dbType, conn string) (db *DB, err error) {
 	gormDB, err := gorm.Open(dbType, conn)
 	if err != nil {
 		return
 	}
 
-	db.Connection = conn
-	db.Type = dbType
+	db = &DB{
+		Connection: conn,
+		Type:       dbType,
+	}
 
 	gormDB.AutoMigrate(&models.Feed{})
 	gormDB.AutoMigrate(&models.Category{})
 	gormDB.AutoMigrate(&models.User{})
 	gormDB.AutoMigrate(&models.Entry{})
 	gormDB.AutoMigrate(&models.Tag{})
+	gormDB.AutoMigrate(&models.APIKey{})
 
 	db.db = gormDB
 
@@ -73,20 +76,29 @@ func (db *DB) Close() error {
 	return db.db.Close()
 }
 
+func createPasswordHashAndSalt(password string) (hash []byte, salt []byte, err error) {
+	salt = make([]byte, PWSaltBytes)
+	_, err = io.ReadFull(rand.Reader, salt)
+	if err != nil {
+		return
+	}
+
+	hash, err = scrypt.Key([]byte(password), salt, 1<<14, 8, 1, PWHashBytes)
+	if err != nil {
+		return
+	}
+
+	return
+}
+
 // NewUser creates a new User object
 func (db *DB) NewUser(username, password string) error {
 	user := &models.User{}
-	if !db.db.Where("username = ?", username).First(&user).RecordNotFound() {
+	if !db.db.Where("username = ?", username).First(user).RecordNotFound() {
 		return Conflict{"User already exists"}
 	}
 
-	salt := make([]byte, PWSaltBytes)
-	_, err := io.ReadFull(rand.Reader, salt)
-	if err != nil {
-		return err
-	}
-
-	hash, err := scrypt.Key([]byte(password), salt, 1<<14, 8, 1, PWHashBytes)
+	hash, salt, err := createPasswordHashAndSalt(password)
 	if err != nil {
 		return err
 	}
@@ -112,6 +124,47 @@ func (db *DB) NewUser(username, password string) error {
 	user.Username = username
 
 	db.db.Create(&user).Related(&user.Categories)
+	return nil
+}
+
+// DeleteUser deletes a User object
+func (db *DB) DeleteUser(userID string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	db.db.Delete(user)
+	return nil
+}
+
+// ChangeUserName for user with userID
+func (db *DB) ChangeUserName(userID, newName string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	db.db.Model(user).Update("username", newName)
+	return nil
+}
+
+// ChangeUserPassword for user with userID
+func (db *DB) ChangeUserPassword(userID, newPassword string) error {
+	user := &models.User{}
+	if db.db.Where("uuid = ?", userID).First(user).RecordNotFound() {
+		return BadRequest{"User does not exists"}
+	}
+
+	hash, salt, err := createPasswordHashAndSalt(newPassword)
+	if err != nil {
+		return err
+	}
+
+	db.db.Model(user).Update(models.User{
+		PasswordHash: hash,
+		PasswordSalt: salt,
+	})
 	return nil
 }
 
@@ -173,6 +226,27 @@ func (db *DB) Authenticate(username, password string) (user models.User, err err
 	}
 
 	return
+}
+
+// NewAPIKey creates a new APIKey object owned by user
+func (db *DB) NewAPIKey(key *models.APIKey, user *models.User) error {
+	if key.Key == "" {
+		return BadRequest{"No key provided"}
+	}
+
+	db.db.Model(user).Association("APIKeys").Append(key)
+
+	return nil
+}
+
+// KeyBelongsToUser returns true if the given APIKey is owned by user
+func (db *DB) KeyBelongsToUser(key *models.APIKey, user *models.User) (bool, error) {
+	if key.Key == "" {
+		return false, BadRequest{"No key provided"}
+	}
+
+	found := !db.db.Model(user).Where("key = ?", key.Key).Related(&models.APIKey{}).RecordNotFound()
+	return found, nil
 }
 
 // NewFeed creates a new Feed object owned by user
@@ -251,6 +325,10 @@ func (db *DB) EditFeed(feed *models.Feed, user *models.User) error {
 
 // NewCategory creates a new Category object owned by user
 func (db *DB) NewCategory(ctg *models.Category, user *models.User) error {
+	if ctg.Name == "" {
+		return BadRequest{"Category name should not be empty"}
+	}
+
 	tmpCtg := &models.Category{}
 	if db.db.Model(user).Where("name = ?", ctg.Name).Related(tmpCtg).RecordNotFound() {
 		ctg.UUID = uuid.NewV4().String()
@@ -559,4 +637,14 @@ func (db *DB) MarkEntry(id string, marker models.Marker, user *models.User) erro
 
 	db.db.Model(&entry).Update(models.Entry{Mark: marker})
 	return nil
+}
+
+// DeleteAll records in the database
+func (db *DB) DeleteAll() {
+	db.db.Delete(&models.Feed{})
+	db.db.Delete(&models.Category{})
+	db.db.Delete(&models.User{})
+	db.db.Delete(&models.Entry{})
+	db.db.Delete(&models.Tag{})
+	db.db.Delete(&models.APIKey{})
 }

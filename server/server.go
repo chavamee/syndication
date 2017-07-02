@@ -15,10 +15,16 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+// Package server provides Syndication's REST API.
+// See docs/API_refrence.md for more information on
+// server requests and responses
 package server
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/chavamee/syndication/config"
@@ -30,13 +36,19 @@ import (
 	"github.com/labstack/echo/middleware"
 )
 
+// DefaultPort server binds to
+const DefaultPort = "8080"
+
 type (
-	Parameters struct {
+	// EntryQueryParams maps query parameters used when GETting entries resources
+	EntryQueryParams struct {
 		Update bool   `query:"update"`
 		Marker string `query:"withMarker"`
 		Saved  bool   `query:"saved"`
 	}
 
+	// Server represents a echo server instance and holds references to other components
+	// needed for the REST API handlers.
 	Server struct {
 		handle        *echo.Echo
 		db            *database.DB
@@ -45,13 +57,15 @@ type (
 		versionGroups map[string]*echo.Group
 	}
 
+	// ErrorResp represents a common format for error responses returned by a Server
 	ErrorResp struct {
 		Reason  string `json:"reason"`
 		Message string `json:"message"`
 	}
 )
 
-func NewServer(db *database.DB, sync *sync.Sync, config config.Server) Server {
+// NewServer creates a new server instance
+func NewServer(db *database.DB, sync *sync.Sync, config config.Server) *Server {
 	server := Server{
 		handle:        echo.New(),
 		db:            db,
@@ -65,48 +79,64 @@ func NewServer(db *database.DB, sync *sync.Sync, config config.Server) Server {
 	server.registerMiddleware()
 	server.registerHandlers()
 
-	return server
+	return &server
 }
 
-func (s *Server) Start() {
-	s.handle.Start(":8080")
+// Start the server
+func (s *Server) Start() error {
+	var port string
+	if s.config.Port == 0 {
+		port = DefaultPort
+	} else {
+		port = strconv.Itoa(s.config.Port)
+	}
+
+	return s.handle.Start(":" + port)
 }
 
-func (s *Server) Stop() {
-	s.handle.Close()
+// Stop the server gracefully
+func (s *Server) Stop() error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout*time.Second)
+	defer cancel()
+	return s.handle.Shutdown(ctx)
 }
 
-// Authenticates user with the given name and password.
-// Return a token that is to be used for any future request.
+// Login a user
 func (s *Server) Login(c echo.Context) error {
 	username := c.FormValue("username")
 	password := c.FormValue("password")
 
 	user, err := s.db.Authenticate(username, password)
 
-	if err == nil {
-		token := jwt.New(jwt.SigningMethodHS256)
-
-		claims := token.Claims.(jwt.MapClaims)
-		claims["id"] = user.UUID
-		claims["admin"] = false
-		claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
-
-		t, err := token.SignedString([]byte(s.config.AuthSecret))
-		if err != nil {
-			return newError(err, &c)
-		}
-
-		return c.JSON(http.StatusOK, map[string]string{
-			"token": t,
-		})
+	if err != nil {
+		return newError(err, &c)
 	}
 
-	return newError(err, &c)
+	token := jwt.New(jwt.SigningMethodHS256)
+
+	claims := token.Claims.(jwt.MapClaims)
+	claims["id"] = user.UUID
+	claims["admin"] = false
+	claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
+
+	t, err := token.SignedString([]byte(s.config.AuthSecret))
+	if err != nil {
+		return newError(err, &c)
+	}
+
+	key := &models.APIKey{Key: t}
+	err = s.db.NewAPIKey(key, &user)
+	if err != nil {
+		return newError(err, &c)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"token": t,
+	})
 }
 
-// Register a user with a given name and password
-func (s *Server) RegisterUser(c echo.Context) error {
+// Register a user
+func (s *Server) Register(c echo.Context) error {
 	err := s.db.NewUser(c.FormValue("username"), c.FormValue("password"))
 	if err != nil {
 		return newError(err, &c)
@@ -115,15 +145,15 @@ func (s *Server) RegisterUser(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
-// Add a feed
-func (s *Server) AddFeed(c echo.Context) error {
+// NewFeed creates a new feed
+func (s *Server) NewFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
 	feed := models.Feed{}
-	if err := c.Bind(&feed); err != nil {
+	if err = c.Bind(&feed); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest)
 	}
 
@@ -143,7 +173,7 @@ func (s *Server) AddFeed(c echo.Context) error {
 	return c.JSON(http.StatusCreated, feed)
 }
 
-// Get a list of feeds
+// GetFeeds returns a list of subscribed feeds
 func (s *Server) GetFeeds(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -161,7 +191,7 @@ func (s *Server) GetFeeds(c echo.Context) error {
 	})
 }
 
-// Get a feed with id
+// GetFeed with id
 func (s *Server) GetFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -176,7 +206,7 @@ func (s *Server) GetFeed(c echo.Context) error {
 	return c.JSON(http.StatusOK, feed)
 }
 
-// Edit a feed with id
+// EditFeed with id
 func (s *Server) EditFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -185,7 +215,7 @@ func (s *Server) EditFeed(c echo.Context) error {
 
 	feed := models.Feed{}
 
-	if err := c.Bind(&feed); err != nil {
+	if err = c.Bind(&feed); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest)
 	}
 
@@ -199,7 +229,7 @@ func (s *Server) EditFeed(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
-// Delete a feed with an id
+// DeleteFeed with id
 func (s *Server) DeleteFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -215,7 +245,7 @@ func (s *Server) DeleteFeed(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
-// Get a list of categories
+// GetCategories returns a list of Categories owned by a user
 func (s *Server) GetCategories(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -233,7 +263,7 @@ func (s *Server) GetCategories(c echo.Context) error {
 	})
 }
 
-// Get a category with id
+// GetCategory with id
 func (s *Server) GetCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -248,13 +278,14 @@ func (s *Server) GetCategory(c echo.Context) error {
 	return c.JSON(http.StatusOK, ctg)
 }
 
+// GetEntriesFromFeed returns a list of entries provided from a feed
 func (s *Server) GetEntriesFromFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
-	params := new(Parameters)
+	params := new(EntryQueryParams)
 	if err = c.Bind(params); err != nil {
 		return newError(err, &c)
 	}
@@ -269,10 +300,11 @@ func (s *Server) GetEntriesFromFeed(c echo.Context) error {
 		withMarker = models.Any
 	}
 
-	feed.User = user
-	feed.UserID = user.ID
 	if params.Update && params.Saved == true && withMarker == models.Unread {
-		s.sync.SyncFeed(&feed, &user)
+		err = s.sync.SyncFeed(&feed, &user)
+		if err != nil {
+			return newError(err, &c)
+		}
 	}
 
 	entries, err := s.db.EntriesFromFeed(feed.UUID, true, withMarker, &user)
@@ -289,13 +321,15 @@ func (s *Server) GetEntriesFromFeed(c echo.Context) error {
 	})
 }
 
+// GetEntriesFromCategory returns a list of Entries
+// that belong to a Feed that belongs to a Category
 func (s *Server) GetEntriesFromCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
-	params := new(Parameters)
+	params := new(EntryQueryParams)
 	if err = c.Bind(params); err != nil {
 		return newError(err, &c)
 	}
@@ -310,8 +344,6 @@ func (s *Server) GetEntriesFromCategory(c echo.Context) error {
 		withMarker = models.Any
 	}
 
-	ctg.User = user
-	ctg.UserID = user.ID
 	if params.Update && params.Saved == true && withMarker == models.Unread {
 		err = s.sync.SyncCategory(&ctg, &user)
 		if err != nil {
@@ -333,6 +365,7 @@ func (s *Server) GetEntriesFromCategory(c echo.Context) error {
 	})
 }
 
+// GetFeedsFromCategory returns a list of Feeds that belong to a Category
 func (s *Server) GetFeedsFromCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -353,28 +386,29 @@ func (s *Server) GetFeedsFromCategory(c echo.Context) error {
 	})
 }
 
-// Add a new category
-func (s *Server) AddCategory(c echo.Context) error {
-	ctg := models.Category{}
-
+// NewCategory creates a new Category
+func (s *Server) NewCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
-	if err := c.Bind(&ctg); err != nil || ctg.Name == "" {
+	ctg := models.Category{}
+	if err = c.Bind(&ctg); err != nil {
+		fmt.Println(err)
 		return echo.NewHTTPError(http.StatusBadRequest)
 	}
 
 	err = s.db.NewCategory(&ctg, &user)
 	if err != nil {
+		fmt.Println(err)
 		return newError(err, &c)
 	}
 
 	return c.JSON(http.StatusCreated, ctg)
 }
 
-// Edit category with id
+// EditCategory with id
 func (s *Server) EditCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -384,7 +418,7 @@ func (s *Server) EditCategory(c echo.Context) error {
 	ctg := models.Category{}
 	ctg.UUID = c.Param("categoryID")
 
-	if err := c.Bind(&ctg); err != nil {
+	if err = c.Bind(&ctg); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest)
 	}
 
@@ -396,6 +430,7 @@ func (s *Server) EditCategory(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
+// AddFeedsToCategory adds a Feed to a Category with id
 func (s *Server) AddFeedsToCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -409,8 +444,8 @@ func (s *Server) AddFeedsToCategory(c echo.Context) error {
 	}
 
 	feedIds := new(FeedIds)
-	if err := c.Bind(feedIds); err != nil {
-		newError(err, &c)
+	if err = c.Bind(feedIds); err != nil {
+		return newError(err, &c)
 	}
 
 	for _, id := range feedIds.Feeds {
@@ -423,7 +458,7 @@ func (s *Server) AddFeedsToCategory(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
-// Delete category with id
+// DeleteCategory with id
 func (s *Server) DeleteCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -440,6 +475,7 @@ func (s *Server) DeleteCategory(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
+// GetStatsForCategory returns statistics related to a Category
 func (s *Server) GetStatsForCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -456,7 +492,7 @@ func (s *Server) GetStatsForCategory(c echo.Context) error {
 	return c.JSON(http.StatusOK, marks)
 }
 
-// Mark a whole category with a marker
+// MarkCategory applies a Marker to a Category
 func (s *Server) MarkCategory(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -478,7 +514,7 @@ func (s *Server) MarkCategory(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
-// Mark a whole feed with a marker
+// MarkFeed applies a Marker to a Feed
 func (s *Server) MarkFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -500,6 +536,7 @@ func (s *Server) MarkFeed(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
+// GetStatsForFeed provides statistics related to a Feed
 func (s *Server) GetStatsForFeed(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -516,6 +553,7 @@ func (s *Server) GetStatsForFeed(c echo.Context) error {
 	return c.JSON(http.StatusOK, marks)
 }
 
+// GetEntry with id
 func (s *Server) GetEntry(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -530,13 +568,14 @@ func (s *Server) GetEntry(c echo.Context) error {
 	return c.JSON(http.StatusOK, entry)
 }
 
+// GetEntries returns a list of entries that belong to a user
 func (s *Server) GetEntries(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
-	params := new(Parameters)
+	params := new(EntryQueryParams)
 	if err = c.Bind(params); err != nil {
 		return newError(err, &c)
 	}
@@ -566,6 +605,7 @@ func (s *Server) GetEntries(c echo.Context) error {
 	})
 }
 
+// MarkEntry applies a Marker to an Entry
 func (s *Server) MarkEntry(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
@@ -587,15 +627,14 @@ func (s *Server) MarkEntry(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNoContent)
 }
 
+// GetStatsForEntries provides statistics related to Entries
 func (s *Server) GetStatsForEntries(c echo.Context) error {
 	user, err := s.getUser(&c)
 	if err != nil {
 		return echo.ErrUnauthorized
 	}
 
-	c.JSON(http.StatusOK, s.db.Stats(&user))
-
-	return echo.NewHTTPError(http.StatusOK)
+	return c.JSON(http.StatusOK, s.db.Stats(&user))
 }
 
 func (s *Server) getUser(c *echo.Context) (models.User, error) {
@@ -603,6 +642,14 @@ func (s *Server) getUser(c *echo.Context) (models.User, error) {
 	claims := userClaim.Claims.(jwt.MapClaims)
 	user, err := s.db.UserWithUUID(claims["id"].(string))
 	if err != nil {
+		return models.User{}, err
+	}
+
+	key := &models.APIKey{
+		Key: userClaim.Raw,
+	}
+	found, err := s.db.KeyBelongsToUser(key, &user)
+	if err != nil || !found {
 		return models.User{}, err
 	}
 
@@ -644,9 +691,9 @@ func (s *Server) registerHandlers() {
 	v1 := s.versionGroups["v1"]
 
 	v1.POST("/login", s.Login)
-	v1.POST("/register", s.RegisterUser)
+	v1.POST("/register", s.Register)
 
-	v1.POST("/feeds", s.AddFeed)
+	v1.POST("/feeds", s.NewFeed)
 	v1.GET("/feeds", s.GetFeeds)
 	v1.GET("/feeds/:feedID", s.GetFeed)
 	v1.PUT("/feeds/:feedID", s.EditFeed)
@@ -655,7 +702,7 @@ func (s *Server) registerHandlers() {
 	v1.PUT("/feeds/:feedID/mark", s.MarkFeed)
 	v1.GET("/feeds/:feedID/stats", s.GetStatsForFeed)
 
-	v1.POST("/categories", s.AddCategory)
+	v1.POST("/categories", s.NewCategory)
 	v1.GET("/categories", s.GetCategories)
 	v1.DELETE("/categories/:categoryID", s.DeleteCategory)
 	v1.PUT("/categories/:categoryID", s.EditCategory)

@@ -33,10 +33,14 @@ const (
 
 type (
 	Server struct {
-		AuthSecret            string `toml:"auth_secret"`
-		AuthSecreteFilePath   string `toml:"auth_secret_file_path"`
-		EnableRequestLogs     bool   `toml:"enable_http_requests_log"`
-		EnablePanicPrintStack bool   `toml:"enable_panic_print_stack"`
+		AuthSecret            string        `toml:"auth_secret"`
+		AuthSecreteFilePath   string        `toml:"auth_secret_file_path"`
+		EnableRequestLogs     bool          `toml:"enable_http_requests_log"`
+		EnablePanicPrintStack bool          `toml:"enable_panic_print_stack"`
+		MaxShutdownTime       int           `toml:"max_shutdown_time"`
+		Port                  int           `toml:"port"`
+		ShutdownTimeout       time.Duration `toml:"shutdown_timeout"`
+		APIKeyExpiration      time.Duration `toml:"api_key_expiration"`
 	}
 
 	Database struct {
@@ -51,7 +55,8 @@ type (
 	}
 
 	Admin struct {
-		AdminSocketPath string `toml:"socket_path"`
+		SocketPath     string `toml:"socket_path"`
+		MaxConnections string `toml:"max_connections"`
 	}
 
 	Config struct {
