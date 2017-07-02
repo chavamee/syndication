@@ -38,7 +38,7 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-const TestDBPath = "/tmp/syndication-test.db"
+const TestDBPath = "/tmp/syndication-test-server.db"
 
 type (
 	ServerTestSuite struct {
@@ -1001,8 +1001,10 @@ func (suite *ServerTestSuite) TestAddFeedsToCategory() {
 
 func TestServerRegister(t *testing.T) {
 	conf := config.NewDefaultConfig()
+	conf.Server.Port = 8060
 
-	db, err := database.NewDB("sqlite3", TestDBPath)
+	db, err := database.NewDB("sqlite3", "/tmp/syndication-test-server-register.db")
+	defer os.Remove(db.Connection)
 	require.NotNil(t, db)
 	require.Nil(t, err)
 
@@ -1018,7 +1020,7 @@ func TestServerRegister(t *testing.T) {
 
 	time.Sleep(1000)
 
-	regResp, err := http.PostForm("http://localhost:8080/v1/register",
+	regResp, err := http.PostForm("http://localhost:8060/v1/register",
 		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
 	require.Nil(t, err)
 
@@ -1035,15 +1037,15 @@ func TestServerRegister(t *testing.T) {
 	require.Nil(t, err)
 
 	server.Stop()
-	err = os.Remove(db.Connection)
-	assert.Nil(t, err)
 }
 
 func TestServerLogin(t *testing.T) {
 	conf := config.NewDefaultConfig()
+	conf.Server.Port = 8070
 
-	db, err := database.NewDB("sqlite3", TestDBPath)
+	db, err := database.NewDB("sqlite3", "/tmp/syndication-test-server-login.db")
 	require.Nil(t, err)
+	defer os.Remove(db.Connection)
 
 	sync := sync.NewSync(db)
 
@@ -1056,7 +1058,7 @@ func TestServerLogin(t *testing.T) {
 
 	time.Sleep(1000)
 
-	regResp, err := http.PostForm("http://localhost:8080/v1/register",
+	regResp, err := http.PostForm("http://localhost:8070/v1/register",
 		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
 	require.Nil(t, err)
 
@@ -1065,7 +1067,7 @@ func TestServerLogin(t *testing.T) {
 	err = regResp.Body.Close()
 	require.Nil(t, err)
 
-	loginResp, err := http.PostForm("http://localhost:8080/v1/login",
+	loginResp, err := http.PostForm("http://localhost:8070/v1/login",
 		url.Values{"username": {"GoTest"}, "password": {"testtesttest"}})
 	require.Nil(t, err)
 
@@ -1087,12 +1089,11 @@ func TestServerLogin(t *testing.T) {
 	assert.Nil(t, err)
 
 	server.Stop()
-	err = os.Remove(db.Connection)
-	assert.Nil(t, err)
 }
 
 func TestServerTestSuite(t *testing.T) {
 	serverSuite := new(ServerTestSuite)
 	suite.Run(t, serverSuite)
 	serverSuite.server.Stop()
+	os.Remove(TestDBPath)
 }

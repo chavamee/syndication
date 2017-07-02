@@ -38,7 +38,7 @@ type (
 	}
 )
 
-const TestDatabasePath = "/tmp/syndication-test.db"
+const TestDatabasePath = "/tmp/syndication-test-db.db"
 
 func (suite *DatabaseTestSuite) SetupTest() {
 	var err error

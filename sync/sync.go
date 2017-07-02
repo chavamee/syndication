@@ -87,6 +87,10 @@ func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.E
 	fp := gofeed.NewParser()
 	fetchedFeed, err := fp.Parse(resp.Body)
 
+	if fetchedFeed == nil {
+		return nil, err
+	}
+
 	if fetchedFeed.UpdatedParsed != nil {
 		if !fetchedFeed.UpdatedParsed.After(feed.LastUpdated) {
 			return nil, nil
