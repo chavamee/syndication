@@ -19,47 +19,22 @@ package sync
 
 import (
 	"crypto/md5"
-	"github.com/chavamee/syndication/database"
-	"github.com/chavamee/syndication/models"
-	"github.com/jasonlvhit/gocron"
-	"github.com/mmcdole/gofeed"
 	"net/http"
 	"time"
+
+	"github.com/chavamee/syndication/database"
+	"github.com/chavamee/syndication/models"
+
+	"github.com/jasonlvhit/gocron"
+	"github.com/mmcdole/gofeed"
+	log "github.com/sirupsen/logrus"
 )
 
+// Sync represents a syncing worker.
 type Sync struct {
 	scheduler   *gocron.Scheduler
 	cronChannel chan bool
 	db          *database.DB
-}
-
-func FetchFeed(feed *models.Feed) error {
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", feed.Subscription, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	fp := gofeed.NewParser()
-	fetchedFeed, err := fp.Parse(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	if feed.Title == "" {
-		feed.Title = fetchedFeed.Title
-	}
-
-	feed.Description = fetchedFeed.Description
-	feed.Source = fetchedFeed.Link
-	return err
 }
 
 func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.Entry, error) {
@@ -78,8 +53,6 @@ func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.E
 		return nil, err
 	}
 
-	defer resp.Body.Close()
-
 	if resp.ContentLength <= 0 {
 		return nil, nil
 	}
@@ -87,8 +60,12 @@ func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.E
 	fp := gofeed.NewParser()
 	fetchedFeed, err := fp.Parse(resp.Body)
 
-	if fetchedFeed == nil {
+	if err != nil {
 		return nil, err
+	}
+
+	if fetchedFeed == nil {
+		return nil, nil
 	}
 
 	if fetchedFeed.UpdatedParsed != nil {
@@ -124,6 +101,11 @@ func (s *Sync) checkForUpdates(feed *models.Feed, user *models.User) ([]models.E
 	feed.Source = fetchedFeed.Link
 	feed.LastUpdated = time.Now()
 
+	err = resp.Body.Close()
+	if err != nil {
+		log.Error(err)
+	}
+
 	return entries, nil
 }
 
@@ -146,13 +128,53 @@ func convertItemsToEntries(feed models.Feed, item *gofeed.Item) models.Entry {
 	return entry
 }
 
+// FetchFeed fetches a feed and populates a Feed model.
+func FetchFeed(feed *models.Feed) error {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", feed.Subscription, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	fp := gofeed.NewParser()
+	fetchedFeed, err := fp.Parse(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if feed.Title == "" {
+		feed.Title = fetchedFeed.Title
+	}
+
+	feed.Description = fetchedFeed.Description
+	feed.Source = fetchedFeed.Link
+
+	err = resp.Body.Close()
+	if err != nil {
+		log.Error(err)
+		// Only report this error
+		err = nil
+	}
+
+	return err
+}
+
+// SyncUsers sync's all user's feeds.
 func (s *Sync) SyncUsers() {
 	users := s.db.Users()
 	for _, user := range users {
-		s.SyncUser(&user)
+		if err := s.SyncUser(&user); err != nil {
+			log.Error(err)
+		}
 	}
 }
 
+// SyncFeed owned by user
 func (s *Sync) SyncFeed(feed *models.Feed, user *models.User) error {
 	if !time.Now().After(feed.LastUpdated.Add(time.Minute)) {
 		return nil
@@ -175,6 +197,7 @@ func (s *Sync) SyncFeed(feed *models.Feed, user *models.User) error {
 	return nil
 }
 
+// SyncCategory owned by user.
 func (s *Sync) SyncCategory(category *models.Category, user *models.User) error {
 	feeds, err := s.db.FeedsFromCategory(category.UUID, user)
 	if err != nil {
@@ -184,31 +207,40 @@ func (s *Sync) SyncCategory(category *models.Category, user *models.User) error 
 	for _, feed := range feeds {
 		feed.Category = *category
 		feed.CategoryID = category.ID
-		s.SyncFeed(&feed, user)
+		err = s.SyncFeed(&feed, user)
+		if err != nil {
+			log.Error(err)
+		}
 	}
 
 	return nil
 }
 
+// SyncUser sync's all feeds owned by user
 func (s *Sync) SyncUser(user *models.User) error {
 	feeds := s.db.Feeds(user)
 	for _, feed := range feeds {
-		s.SyncFeed(&feed, user)
+		if err := s.SyncFeed(&feed, user); err != nil {
+			log.Error(err)
+		}
 	}
 
 	return nil
 }
 
+// Start a syncer
 func (s *Sync) Start() {
 	s.scheduler.Every(5).Minutes().Do(s.SyncUsers)
 	s.scheduler.RunAll()
 	s.cronChannel = s.scheduler.Start()
 }
 
+// Stop a syncer
 func (s *Sync) Stop() {
 	s.cronChannel <- true
 }
 
+// NewSync creates a new Sync object
 func NewSync(db *database.DB) *Sync {
 	return &Sync{
 		db:        db,
