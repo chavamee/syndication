@@ -29,6 +29,60 @@ import (
 	"github.com/urfave/cli"
 )
 
+func findSystemConfig() (config.Config, error) {
+	if _, err := os.Stat(config.SystemConfigPath); err != nil {
+		return config.Config{}, err
+	}
+
+	conf, err := config.NewConfig(config.SystemConfigPath)
+	if err != nil {
+		return config.Config{}, err
+	}
+
+	return conf, nil
+}
+
+func startApp(c *cli.Context) error {
+	var conf config.Config
+	var err error
+
+	if c.String("config") == "" {
+		conf, err = findSystemConfig()
+		if err != nil {
+			color.Red(err.Error())
+			return err
+		}
+	} else {
+		conf, err = config.NewConfig(c.String("config"))
+		if err != nil {
+			color.Red(err.Error())
+			return err
+		}
+	}
+
+	db, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
+	if err != nil {
+		return err
+	}
+	sync := sync.NewSync(db)
+	sync.Start()
+
+	admin, err := admin.NewAdmin(db, conf.Admin.SocketPath)
+	if err != nil {
+		return err
+	}
+	admin.Start()
+
+	defer admin.Stop(true)
+
+	server := server.NewServer(db, sync, conf.Server)
+	if err = server.Start(); err != nil {
+		color.Red(err.Error())
+	}
+
+	return err
+}
+
 func main() {
 	app := cli.NewApp()
 
@@ -54,40 +108,7 @@ func main() {
 		},
 	}
 
-	app.Action = func(c *cli.Context) error {
-		var conf config.Config
-		var err error
-
-		if c.String("config") == "" {
-			conf = config.DefaultConfig
-		} else {
-			conf, err = config.NewConfig(c.String("config"))
-			if err != nil {
-				color.Red(err.Error())
-				return err
-			}
-		}
-
-		db, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
-		if err != nil {
-			return err
-		}
-		sync := sync.NewSync(db)
-		sync.Start()
-
-		admin, err := admin.NewAdmin(db, conf.Admin.SocketPath)
-		if err != nil {
-			return err
-		}
-		admin.Start()
-
-		defer admin.Stop(true)
-
-		server := server.NewServer(db, sync, conf.Server)
-		server.Start()
-
-		return err
-	}
+	app.Action = startApp
 
 	app.Run(os.Args)
 }
