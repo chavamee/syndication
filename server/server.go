@@ -34,10 +34,14 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // DefaultPort server binds to
-const DefaultPort = "8080"
+const DefaultPort = "80"
+
+// DefaultTLSPort server binds to if TLS is enabled
+const DefaultTLSPort = "443"
 
 type (
 	// EntryQueryParams maps query parameters used when GETting entries resources
@@ -76,6 +80,11 @@ func NewServer(db *database.DB, sync *sync.Sync, config config.Server) *Server {
 
 	server.versionGroups["v1"] = server.handle.Group("v1")
 
+	if config.EnableTLS {
+		server.handle.AutoTLSManager.HostPolicy = autocert.HostWhitelist(config.Domain)
+		server.handle.AutoTLSManager.Cache = autocert.DirCache(config.CertCacheDir)
+	}
+
 	server.registerMiddleware()
 	server.registerHandlers()
 
@@ -85,13 +94,29 @@ func NewServer(db *database.DB, sync *sync.Sync, config config.Server) *Server {
 // Start the server
 func (s *Server) Start() error {
 	var port string
-	if s.config.Port == 0 {
-		port = DefaultPort
+	if s.config.EnableTLS {
+		if s.config.TLSPort == 0 {
+			port = DefaultTLSPort
+		} else {
+			port = strconv.Itoa(s.config.TLSPort)
+		}
 	} else {
-		port = strconv.Itoa(s.config.Port)
+		if s.config.HTTPPort == 0 {
+			port = DefaultPort
+		} else {
+			port = strconv.Itoa(s.config.HTTPPort)
+		}
+
 	}
 
-	return s.handle.Start(":" + port)
+	var err error
+	if s.config.EnableTLS {
+		err = s.handle.StartAutoTLS(":" + port)
+	} else {
+		err = s.handle.Start(":" + port)
+	}
+
+	return err
 }
 
 // Stop the server gracefully

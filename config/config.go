@@ -27,7 +27,6 @@ import (
 
 const (
 	SystemConfigPath = "/etc/syndication/config.toml"
-	UserConfigPath   = "%s/syndication/config.toml"
 )
 
 type (
@@ -40,9 +39,10 @@ type (
 		Domain                string        `toml:"domain"`
 		CertCacheDir          string        `toml:"cert_cache_dir"`
 		MaxShutdownTime       int           `toml:"max_shutdown_time"`
-		Port                  int           `toml:"port"`
+		HTTPPort              int           `toml:"http_port"`
 		ShutdownTimeout       time.Duration `toml:"shutdown_timeout"`
 		APIKeyExpiration      time.Duration `toml:"api_key_expiration"`
+		TLSPort               int           `toml:"tls_port"`
 	}
 
 	Database struct {
@@ -82,7 +82,7 @@ var (
 		EnablePanicPrintStack: true,
 		AuthSecret:            "",
 		AuthSecreteFilePath:   "",
-		Port:                  80,
+		HTTPPort:              80,
 	}
 
 	DefaultAdminConfig = Admin{
