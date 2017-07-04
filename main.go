@@ -18,16 +18,108 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/chavamee/syndication/admin"
+	"github.com/chavamee/syndication/bootstrap"
 	"github.com/chavamee/syndication/config"
 	"github.com/chavamee/syndication/database"
 	"github.com/chavamee/syndication/server"
 	"github.com/chavamee/syndication/sync"
+
 	"github.com/fatih/color"
 	"github.com/urfave/cli"
 )
+
+func findConfig() (config.Config, bool, error) {
+	if _, err := os.Stat(config.SystemConfigPath); err == nil {
+		conf, err := config.NewConfig(config.SystemConfigPath)
+		if err != nil {
+			color.Set(color.FgRed, color.Bold)
+			fmt.Println("Failed to parse system configuration file")
+			color.Unset()
+			return config.Config{}, true, err
+		}
+
+		return conf, true, nil
+	}
+
+	userPath := fmt.Sprintf(config.UserConfigPath, os.Getenv("HOME"))
+	if _, err := os.Stat(userPath); err == nil {
+		conf, err := config.NewConfig(userPath)
+		if err != nil {
+			color.Set(color.FgRed, color.Bold)
+			fmt.Println("Failed to parse user configuration file")
+			color.Unset()
+			return config.Config{}, true, err
+		}
+		return conf, true, nil
+	}
+
+	return config.Config{}, false, nil
+}
+
+func startApp(c *cli.Context) error {
+	var conf config.Config
+
+	color.Set(color.FgGreen, color.Bold)
+	fmt.Println("Starting Syndication")
+	fmt.Println()
+	color.Unset()
+
+	if c.String("config") == "" {
+		sysConfig, found, err := findConfig()
+		if found {
+			if err != nil {
+				return err
+			}
+
+			conf = sysConfig
+		} else if c.Bool("skip-bootstrap") == true {
+			conf = config.DefaultConfig
+		} else {
+			bs := bootstrap.NewBootstrapper("/tmp/synd.toml", false)
+			var err error
+			conf, err = bs.Setup()
+			if err != nil {
+				return err
+			}
+
+			fmt.Println("Saving configuration")
+			err = conf.Save()
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		var err error
+		conf, err = config.NewConfig(c.String("config"))
+		if err != nil {
+			return err
+		}
+	}
+
+	db, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
+	if err != nil {
+		return err
+	}
+	sync := sync.NewSync(db)
+	sync.Start()
+
+	admin, err := admin.NewAdmin(db, conf.Admin.SocketPath)
+	if err != nil {
+		return err
+	}
+	admin.Start()
+
+	defer admin.Stop(true)
+
+	server := server.NewServer(db, sync, conf.Server)
+	server.Start()
+
+	return err
+}
 
 func main() {
 	app := cli.NewApp()
@@ -49,45 +141,19 @@ func main() {
 			Usage: "Enable/Disable admin",
 		},
 		cli.BoolFlag{
+			Name:  "skip-boostrap",
+			Usage: "Skip bootstrapping",
+		},
+		cli.BoolFlag{
 			Name:  "sync",
 			Usage: "Enable/Disable sync",
 		},
 	}
 
-	app.Action = func(c *cli.Context) error {
-		var conf config.Config
-		var err error
+	app.Action = startApp
 
-		if c.String("config") == "" {
-			conf = config.NewDefaultConfig()
-		} else {
-			conf, err = config.NewConfig(c.String("config"))
-			if err != nil {
-				color.Red(err.Error())
-				return err
-			}
-		}
-
-		db, err := database.NewDB(conf.Database.Type, conf.Database.Connection)
-		if err != nil {
-			return err
-		}
-		sync := sync.NewSync(db)
-		sync.Start()
-
-		admin, err := admin.NewAdmin(db, conf.Admin.SocketPath)
-		if err != nil {
-			return err
-		}
-		admin.Start()
-
-		defer admin.Stop(true)
-
-		server := server.NewServer(db, sync, conf.Server)
-		server.Start()
-
-		return err
+	err := app.Run(os.Args)
+	if err != nil {
+		color.Red(err.Error())
 	}
-
-	app.Run(os.Args)
 }
