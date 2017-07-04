@@ -5,7 +5,6 @@
   it under the terms of the GNU Affero General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
-
   This program is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -59,7 +58,7 @@ type (
 
 	Admin struct {
 		SocketPath     string `toml:"socket_path"`
-		MaxConnections string `toml:"max_connections"`
+		MaxConnections int    `toml:"max_connections"`
 	}
 
 	Config struct {
@@ -68,29 +67,87 @@ type (
 		Server    Server
 		Sync      Sync
 		Admin     Admin
+		path      string `toml:"-"`
 	}
 )
 
 var (
-	defaultConfig = Config{
+	DefaultDatabaseConfig = Database{
+		Type:       "sqlite3",
+		Connection: "/var/syndication/syndication.db",
+	}
+
+	DefaultServerConfig = Server{
+		EnableRequestLogs:     false,
+		EnablePanicPrintStack: true,
+		AuthSecret:            "",
+		AuthSecreteFilePath:   "",
+		Port:                  80,
+	}
+
+	DefaultAdminConfig = Admin{
+		SocketPath:     "/var/syndication/syndication.admin",
+		MaxConnections: 5,
+	}
+
+	DefaultSyncConfig = Sync{
+		SyncInterval: time.Minute * 15,
+	}
+
+	DefaultConfig = Config{
 		Databases: map[string]Database{
-			"sqlite": {
-				Type:       "sqlite3",
-				Connection: "/var/syndication/db/syndication.db",
-			}},
-
-		Server: Server{
-			EnableRequestLogs:     false,
-			EnablePanicPrintStack: true,
-			AuthSecret:            "",
-			AuthSecreteFilePath:   "",
+			"sqlite": DefaultDatabaseConfig,
 		},
-
-		Sync: Sync{
-			SyncInterval: time.Minute * 15,
-		},
+		Admin:  DefaultAdminConfig,
+		Server: DefaultServerConfig,
+		Sync:   DefaultSyncConfig,
 	}
 )
+
+func (c *Config) verifyConfig() error {
+	if c.Server.AuthSecreteFilePath != "" {
+		err := c.getSecretFromFile(c.Server.AuthSecreteFilePath)
+		if err != nil {
+			return err
+		}
+	} else if c.Server.AuthSecret == "" {
+		return InvalidFieldValue{"Auth secret should not be empty"}
+	}
+
+	if len(c.Databases) > 1 {
+		return InvalidFieldValue{"Can only have one database definition"}
+	}
+
+	if len(c.Databases) == 0 {
+		return InvalidFieldValue{"Configuration requires a database definition"}
+	}
+
+	for dbType, db := range c.Databases {
+		if dbType == "sqlite" {
+			if !db.Enable {
+				continue
+			}
+
+			err := c.checkSQLiteConfig()
+			if err != nil {
+				return err
+			}
+
+			c.Database.Connection = c.Databases["sqlite"].Connection
+			c.Database.Type = "sqlite3"
+		} else if dbType == "mysql" {
+		} else if dbType == "postgres" {
+		} else {
+			return InvalidFieldValue{"Database type cannot be empty"}
+		}
+	}
+
+	if c.Database == (Database{}) {
+		return InvalidFieldValue{"Database not defined or not enabled"}
+	}
+
+	return nil
+}
 
 func (c *Config) getSecretFromFile(path string) error {
 	absPath, err := filepath.Abs(path)
@@ -133,64 +190,43 @@ func (c *Config) checkSQLiteConfig() error {
 	return nil
 }
 
-func NewConfig(path string) (config Config, err error) {
-	_, err = os.Stat(path)
-
-	if err == nil {
-		_, err = toml.DecodeFile(path, &config)
-	}
-
+func (c *Config) Save() error {
+	file, err := os.Create(c.path)
 	if err != nil {
-		err = ParsingError{"Unable to parse error"}
-		return
+		return err
 	}
 
-	if config.Server.AuthSecreteFilePath != "" {
-		err = config.getSecretFromFile(config.Server.AuthSecreteFilePath)
-		if err != nil {
-			return
-		}
-	} else if config.Server.AuthSecret == "" {
-		err = InvalidFieldValue{"Auth secret should not be empty"}
-		return
+	err = toml.NewEncoder(file).Encode(c)
+	if err != nil {
+		return err
 	}
 
-	if len(config.Databases) > 1 {
-		err = InvalidFieldValue{"Can only have one database definition"}
-		return
-	}
-
-	if len(config.Databases) == 0 {
-		err = InvalidFieldValue{"Configuration requires a database definition"}
-	}
-
-	for dbType, db := range config.Databases {
-		if dbType == "sqlite" {
-			if !db.Enable {
-				continue
-			}
-
-			err = config.checkSQLiteConfig()
-			if err != nil {
-				return
-			}
-
-			config.Database.Connection = config.Databases["sqlite"].Connection
-			config.Database.Type = "sqlite3"
-		} else if dbType == "mysql" {
-		} else if dbType == "postgres" {
-		} else {
-			err = InvalidFieldValue{"Database type cannot be empty"}
-			return
-		}
-	}
-
-	if config.Database == (Database{}) {
-		err = InvalidFieldValue{"Database not defined or not enabled"}
-	}
-	return
+	return nil
 }
 
-func NewDefaultConfig() Config {
-	return defaultConfig
+func NewEmptyConfig(path string) Config {
+	return Config{
+		path: path,
+	}
+}
+
+func NewConfig(path string) (config Config, err error) {
+	config.path = path
+
+	_, err = os.Stat(path)
+	if err != nil {
+		return
+	}
+
+	_, err = toml.DecodeFile(path, &config)
+	if err != nil {
+		return
+	}
+
+	err = config.verifyConfig()
+	if err != nil {
+		config = Config{}
+	}
+
+	return
 }

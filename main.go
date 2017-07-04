@@ -59,7 +59,7 @@ func main() {
 		var err error
 
 		if c.String("config") == "" {
-			conf = config.NewDefaultConfig()
+			conf = config.DefaultConfig
 		} else {
 			conf, err = config.NewConfig(c.String("config"))
 			if err != nil {
