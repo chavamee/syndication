@@ -6,7 +6,6 @@
 
 ## Planned Features
 * Plugin system
-* Automatic HTTPS and SQL database setup
 
 ## Building
 
