@@ -54,7 +54,9 @@ type (
 )
 
 func (suite *ServerTestSuite) SetupTest() {
-	conf := config.NewDefaultConfig()
+	conf := config.DefaultConfig
+	conf.Server.Port = 8080
+	conf.Server.AuthSecret = "secret"
 
 	var err error
 	suite.db, err = database.NewDB("sqlite3", TestDBPath)
@@ -1000,7 +1002,7 @@ func (suite *ServerTestSuite) TestAddFeedsToCategory() {
 }
 
 func TestServerRegister(t *testing.T) {
-	conf := config.NewDefaultConfig()
+	conf := config.DefaultConfig
 	conf.Server.Port = 8060
 
 	db, err := database.NewDB("sqlite3", "/tmp/syndication-test-server-register.db")
@@ -1040,7 +1042,7 @@ func TestServerRegister(t *testing.T) {
 }
 
 func TestServerLogin(t *testing.T) {
-	conf := config.NewDefaultConfig()
+	conf := config.DefaultConfig
 	conf.Server.Port = 8070
 
 	db, err := database.NewDB("sqlite3", "/tmp/syndication-test-server-login.db")

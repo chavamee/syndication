@@ -22,9 +22,11 @@ package database
 import (
 	"crypto/rand"
 	"io"
+	"time"
 
 	"github.com/jinzhu/gorm"
 	// GORM dialect packages
+	"github.com/dgrijalva/jwt-go"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	_ "github.com/jinzhu/gorm/dialects/postgres"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
@@ -229,14 +231,28 @@ func (db *DB) Authenticate(username, password string) (user models.User, err err
 }
 
 // NewAPIKey creates a new APIKey object owned by user
-func (db *DB) NewAPIKey(key *models.APIKey, user *models.User) error {
-	if key.Key == "" {
-		return BadRequest{"No key provided"}
+func (db *DB) NewAPIKey(secret string, user *models.User) (models.APIKey, error) {
+	token := jwt.New(jwt.SigningMethodHS256)
+
+	claims := token.Claims.(jwt.MapClaims)
+	claims["id"] = user.UUID
+	claims["admin"] = false
+	claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
+
+	t, err := token.SignedString([]byte(secret))
+	if err != nil {
+		return models.APIKey{}, err
+	}
+
+	key := &models.APIKey{
+		Key:    t,
+		User:   *user,
+		UserID: user.ID,
 	}
 
 	db.db.Model(user).Association("APIKeys").Append(key)
 
-	return nil
+	return *key, nil
 }
 
 // KeyBelongsToUser returns true if the given APIKey is owned by user

@@ -975,14 +975,10 @@ func (suite *DatabaseTestSuite) TestCategoryStats() {
 }
 
 func (suite *DatabaseTestSuite) TestKeyBelongsToUser() {
-	key := models.APIKey{
-		Key: "123456789",
-	}
-
-	err := suite.db.NewAPIKey(&key, &suite.user)
+	key, err := suite.db.NewAPIKey("secret", &suite.user)
 	suite.Require().Nil(err)
 
-	found, err := suite.db.KeyBelongsToUser(&key, &suite.user)
+	found, err := suite.db.KeyBelongsToUser(&models.APIKey{Key: key.Key}, &suite.user)
 	suite.Require().Nil(err)
 	suite.True(found)
 }

@@ -161,12 +161,12 @@ type (
 
 	APIKey struct {
 		ID        uint      `json:"-" gorm:"primary_key"`
-		CreatedAt time.Time `json:"created_at,omitempty"`
-		UpdatedAt time.Time `json:"updated_at,omitempty"`
+		CreatedAt time.Time `json:"-"`
+		UpdatedAt time.Time `json:"-"`
 
-		Key string
+		Key string `json:"token"`
 
-		User   User
-		UserID int
+		User   User `json:"-"`
+		UserID uint `json:"-"`
 	}
 )

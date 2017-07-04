@@ -30,6 +30,7 @@ import (
 	"github.com/chavamee/syndication/database"
 	"github.com/chavamee/syndication/models"
 	"github.com/chavamee/syndication/sync"
+
 	"github.com/dgrijalva/jwt-go"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
@@ -111,27 +112,12 @@ func (s *Server) Login(c echo.Context) error {
 		return newError(err, &c)
 	}
 
-	token := jwt.New(jwt.SigningMethodHS256)
-
-	claims := token.Claims.(jwt.MapClaims)
-	claims["id"] = user.UUID
-	claims["admin"] = false
-	claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
-
-	t, err := token.SignedString([]byte(s.config.AuthSecret))
+	key, err := s.db.NewAPIKey(s.config.AuthSecret, &user)
 	if err != nil {
 		return newError(err, &c)
 	}
 
-	key := &models.APIKey{Key: t}
-	err = s.db.NewAPIKey(key, &user)
-	if err != nil {
-		return newError(err, &c)
-	}
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"token": t,
-	})
+	return c.JSON(http.StatusOK, key)
 }
 
 // Register a user

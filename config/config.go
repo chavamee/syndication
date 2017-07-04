@@ -35,8 +35,11 @@ type (
 	Server struct {
 		AuthSecret            string        `toml:"auth_secret"`
 		AuthSecreteFilePath   string        `toml:"auth_secret_file_path"`
+		EnableTLS             bool          `toml:"enable_tls"`
 		EnableRequestLogs     bool          `toml:"enable_http_requests_log"`
 		EnablePanicPrintStack bool          `toml:"enable_panic_print_stack"`
+		Domain                string        `toml:"domain"`
+		CertCacheDir          string        `toml:"cert_cache_dir"`
 		MaxShutdownTime       int           `toml:"max_shutdown_time"`
 		Port                  int           `toml:"port"`
 		ShutdownTimeout       time.Duration `toml:"shutdown_timeout"`
